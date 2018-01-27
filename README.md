@@ -4,7 +4,7 @@ Implementation of proximal policy optimization(PPO) using tensorflow with custom
 
 Environment
 ----------------------------------------
-Refer to [OptClang-gym](https://github.com/JaredCJR/OptClang-gym)
+Refer to [gym-OptClang](https://github.com/JaredCJR/gym-OptClang)
 
 Dependencies
 ----------------------------------------
