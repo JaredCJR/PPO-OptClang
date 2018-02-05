@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 The algorithm is based on MorvanZhou's implementation: https://morvanzhou.github.io/tutorials
 And he also refers to the work of OpenAI and DeepMind.
@@ -18,26 +19,26 @@ gym_OptClang
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-import gym, threading, queue
-import gym_OptClang
+import gym, gym_OptClang
+import random, threading, queue, operator, os, sys
 
 EP_MAX = 1000
-EP_LEN = 200
 N_WORKER = 5                # parallel workers
 GAMMA = 0.9                 # reward discount factor
 A_LR = 0.0001               # learning rate for actor
 C_LR = 0.0002               # learning rate for critic
-MIN_BATCH_SIZE = 64         # minimum batch size for updating PPO
+MIN_BATCH_SIZE = 24         # minimum batch size for updating PPO
 UPDATE_STEP = 10            # loop update operation n-steps
 EPSILON = 0.2               # for clipping surrogate objective
 
 
 class PPO(object):
     def __init__(self, env):
+        tf.reset_default_graph()
         self.S_DIM = len(env.observation_space.low)
         self.A_DIM = env.action_space.n
         self.sess = tf.Session()
-        self.tfs = tf.placeholder(tf.float32, [None, S_DIM], 'state')
+        self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
 
         # critic
         l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu)
@@ -53,7 +54,7 @@ class PPO(object):
         self.sample_op = tf.squeeze(pi.sample(1), axis=0)  # operation of choosing action
         self.update_oldpi_op = [oldp.assign(p) for p, oldp in zip(pi_params, oldpi_params)]
 
-        self.tfa = tf.placeholder(tf.float32, [None, A_DIM], 'action')
+        self.tfa = tf.placeholder(tf.float32, [None, self.A_DIM], 'action')
         self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
         # ratio = tf.exp(pi.log_prob(self.tfa) - oldpi.log_prob(self.tfa))
         ratio = pi.prob(self.tfa) / (oldpi.prob(self.tfa) + 1e-5)
@@ -86,8 +87,8 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             l1 = tf.layers.dense(self.tfs, 200, tf.nn.relu, trainable=trainable)
-            mu = 2 * tf.layers.dense(l1, A_DIM, tf.nn.tanh, trainable=trainable)
-            sigma = tf.layers.dense(l1, A_DIM, tf.nn.softplus, trainable=trainable)
+            mu = 2 * tf.layers.dense(l1, self.A_DIM, tf.nn.tanh, trainable=trainable)
+            sigma = tf.layers.dense(l1, self.A_DIM, tf.nn.softplus, trainable=trainable)
             norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
         return norm_dist, params
@@ -103,42 +104,123 @@ class PPO(object):
 
 
 class Worker(object):
-    def __init__(self, WorkerID, EpisodeLock, GAME):
+    def __init__(self, WorkerID, Locks, GAME):
         self.wid = WorkerID
         self.env = gym.make(GAME).unwrapped
         self.ppo = PPO(self.env)
-        self.SharedEpisodeLock = EpisodeLock
+        self.SharedLocks = Locks
+
+    def getMostInfluentialState(self, states, ResetInfo):
+        retVec = None
+        stats = ResetInfo["FunctionUsageDict"]
+        if not stats.items():
+            '''
+            nothing profiled, random select
+            '''
+            key = random.choice(list(states.keys()))
+        else:
+            '''
+            select the function with the maximum usage
+            '''
+            key = max(stats.items(), key=operator.itemgetter(1))[0]
+
+        try:
+            retVec = states[key]
+        except KeyError:
+            '''
+            Random selection will never come to here.
+            This is caused by perf profiled information which does not contain function arguments.
+            '''
+            print("Using re to search C++ style name\nKey error:\nkey={}\ndict.keys()={}\n".format(key, states.keys()))
+            try:
+                FunctionList = list(states.keys())
+                newFunctionList = []
+                rglexKey = key.replace(' ', '')
+                for func in FunctionList:
+                    newFunctionList.append(func.replace(' ', ''))
+                FunctionList = newFunctionList
+                for func in FunctionList:
+                    matched = re.search(re.escape(func), rglexKey)
+                    if matched:
+                        retVec = states[matched]
+            except e:
+                print("RegExp exception\nKey error:\nkey={}\nrglexKey={}\ndict.keys()={}\nmatched={}\nreason={}\n".format(key, rglexKey, states.keys()), matched, e)
+        except e:
+            print("Unexpected exception\nKey error:\nkey={}\ndict.keys()={}\nreason={}\n".format(key, states.keys()), e)
+        if retVec is None:
+            retVec = states[random.choice(list(states.keys()))]
+        return retVec
+
+    def calcEachReward(self, info):
+        pass
+
+    def appendStateRewards(self, buffer_s, buffer_a, buffer_r, states, rewards, action):
+        pass
+
+    def calcDiscountedRewards(self, buffer_r, GAMMA):
+        pass
+
+    def calcEpisodeReward(self, rewards):
+        pass
 
     def work(self):
         global GLOBAL_EP, GLOBAL_RUNNING_R, GLOBAL_UPDATE_COUNTER
         while not COORD.should_stop():
-            s = self.env.reset()
-            ep_r = 0
+            QueueLock = self.SharedLocks[0]
+            CounterLock = self.SharedLocks[1]
+            PlotEpiLock = self.SharedLocks[2]
+            states, ResetInfo = self.env.reset()
+            EpisodeReward = 0
             buffer_s, buffer_a, buffer_r = [], [], []
-            for t in range(EP_LEN):
+            while True:
                 if not ROLLING_EVENT.is_set():                  # while global PPO is updating
                     ROLLING_EVENT.wait()                        # wait until PPO is updated
                     buffer_s, buffer_a, buffer_r = [], [], []   # clear history buffer, use new policy to collect data
-                a = self.ppo.choose_action(s)
-                s_, r, done, _ = self.env.step(a)
-                buffer_s.append(s)
-                buffer_a.append(a)
-                buffer_r.append((r + 8) / 8)                    # normalize reward, find to be useful
-                s = s_
-                ep_r += r
+                '''
+                Choose the features from the most inflential function
+                '''
+                state = self.getMostInfluentialState(states, ResetInfo)
+                sys.exit(1)
+                action = self.ppo.choose_action(state)
+                nextStates, reward, done, info = self.env.step(action)
+                '''
+                If build failed, skip it.
+                '''
+                if reward < 0:
+                    break
 
-                GLOBAL_UPDATE_COUNTER += 1               # count to minimum batch size, no need to wait other workers
-                if t == EP_LEN - 1 or GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE:
-                    v_s_ = self.ppo.get_v(s_)
-                    discounted_r = []                           # compute discounted reward
-                    for r in buffer_r[::-1]:
-                        v_s_ = r + GAMMA * v_s_
-                        discounted_r.append(v_s_)
-                    discounted_r.reverse()
+                '''
+                Calculate actual rewards for all functions
+                '''
+                rewards = self.calcEachReward(info)
+
+                '''
+                Match the states and rewards
+                '''
+                self.appendStateRewards(buffer_s, buffer_a, buffer_r, states, rewards, action)
+
+                '''
+                Calculate overall reward for plotting
+                '''
+                EpisodeReward = self.calcEpisodeReward(rewards)
+
+                # add the generated results
+                CounterLock.acquire()
+                GLOBAL_UPDATE_COUNTER += len(nextStates.keys())
+                CounterLock.release()
+                if GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE or done:
+                    '''
+                    Calculate discounted rewards for all functions
+                    '''
+                    discounted_r = self.calcDiscountedRewards(buffer_r, GAMMA)
 
                     bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.array(discounted_r)[:, np.newaxis]
                     buffer_s, buffer_a, buffer_r = [], [], []
-                    QUEUE.put(np.hstack((bs, ba, br)))          # put data in the queue
+
+                    QueueLock.acquire()
+                    QUEUE.put(np.hstack((bs, ba, br)))          # put data in the shared queue
+                    QueueLock.release()
+
                     if GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE:
                         ROLLING_EVENT.clear()       # stop collecting data
                         UPDATE_EVENT.set()          # globalPPO update
@@ -146,29 +228,43 @@ class Worker(object):
                     if GLOBAL_EP >= EP_MAX:         # stop training
                         COORD.request_stop()
                         break
+                if done:
+                    break
+                else:
+                    states = nextStates
 
             # record reward changes, plot later
+            PlotEpiLock.acquire()
             if len(GLOBAL_RUNNING_R) == 0:
-                GLOBAL_RUNNING_R.append(ep_r)
+                GLOBAL_RUNNING_R.append(EpisodeReward)
             else:
-                GLOBAL_RUNNING_R.append(GLOBAL_RUNNING_R[-1]*0.9+ep_r*0.1)
-            self.SharedEpisodeLock.acquire()
+                GLOBAL_RUNNING_R.append(GLOBAL_RUNNING_R[-1]*0.9+EpisodeReward*0.1)
             GLOBAL_EP += 1
-            self.SharedEpisodeLock.release()
-            print('{0:.1f}%'.format(GLOBAL_EP/EP_MAX*100), '|W%i' % self.wid,  '|Ep_r: %.2f' % ep_r,)
+            PlotEpiLock.release()
+            print('{0:.1f}%'.format(GLOBAL_EP/EP_MAX*100), '|W%i' % self.wid,  '|EpisodeReward: %.2f' % EpisodeReward,)
 
 
 if __name__ == '__main__':
+    Game='OptClang-v0'
+    # remove worker file list.
+    WorkerListLoc = "/tmp/gym-OptClang-WorkerList"
+    if os.path.exists(WorkerListLoc):
+        os.remove(WorkerListLoc)
+
     UPDATE_EVENT, ROLLING_EVENT = threading.Event(), threading.Event()
     UPDATE_EVENT.clear()            # not update now
     ROLLING_EVENT.set()             # start to roll out
-    EpisodeLock = threading.Lock()  # prevent race condition
+    # prevent race condition with 3 locks
+    #TODO: release all lock when sigterm
+    Locks = []
+    for i in range(3):
+        Locks.append(threading.Lock())
     workers = []
     for i in range(N_WORKER):
-        workers.append(Worker(WorkerID=i, EpisodeLock=EpisodeLock, GAME='OptClang-v0'))
+        workers.append(Worker(WorkerID=i, Locks=Locks, GAME=Game))
 
     GLOBAL_UPDATE_COUNTER, GLOBAL_EP = 0, 0
-    GLOBAL_PPO = PPO()
+    GLOBAL_PPO = PPO(gym.make(Game).unwrapped)
     GLOBAL_RUNNING_R = []
     COORD = tf.train.Coordinator()
     QUEUE = queue.Queue()           # workers putting data in this queue
