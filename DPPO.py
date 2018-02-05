@@ -20,7 +20,7 @@ import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 import gym, gym_OptClang
-import random, threading, queue, operator, os, sys
+import random, threading, queue, operator, os, sys, re
 
 EP_MAX = 1000
 N_WORKER = 5                # parallel workers
@@ -96,7 +96,8 @@ class PPO(object):
     def choose_action(self, s):
         s = s[np.newaxis, :]
         a = self.sess.run(self.sample_op, {self.tfs: s})[0]
-        return np.clip(a, -2, 2)
+        #FIXME: how to choose the action?
+        return a.argmax()
 
     def get_v(self, s):
         if s.ndim < 2: s = s[np.newaxis, :]
@@ -111,6 +112,13 @@ class Worker(object):
         self.SharedLocks = Locks
 
     def getMostInfluentialState(self, states, ResetInfo):
+        """
+        return the most influential features from profiled data.
+        If not profiled, random pick.
+        If the function name does not match in the fetures, try others based on the usage
+        in descending order.
+        return an numpy array object.
+        """
         retVec = None
         stats = ResetInfo["FunctionUsageDict"]
         if not stats.items():
@@ -139,17 +147,41 @@ class Worker(object):
                 for func in FunctionList:
                     newFunctionList.append(func.replace(' ', ''))
                 FunctionList = newFunctionList
+                done = False
+                # try the one with maximum usage
                 for func in FunctionList:
                     matched = re.search(re.escape(func), rglexKey)
-                    if matched:
-                        retVec = states[matched]
-            except e:
+                    if matched is not None:
+                        retVec = states[matched.group[0]]
+                        done = True
+                        break
+                # build list of [key, usage]
+                UsageList = []
+                for name, usage in stats.items():
+                    UsageList.append([name, usage])
+                # based on the usage, sort it
+                sorted(UsageList, key=operator.itemgetter(1), reverse=True)
+                # if not found, try others based on the usage.
+                if retVec is None:
+                    for usage in UsageList[1:]: # the first one is tried above.
+                        key = usage[0]
+                        rglexKey = key.replace(' ', '')
+                        for func in FunctionList:
+                            matched = re.search(re.escape(func), rglexKey)
+                            if matched is not None:
+                                retVec = states[matched.group[0]]
+                                done = True
+                                break
+                        if done:
+                            break
+            except Exception as e:
                 print("RegExp exception\nKey error:\nkey={}\nrglexKey={}\ndict.keys()={}\nmatched={}\nreason={}\n".format(key, rglexKey, states.keys()), matched, e)
         except e:
             print("Unexpected exception\nKey error:\nkey={}\ndict.keys()={}\nreason={}\n".format(key, states.keys()), e)
         if retVec is None:
+            print("Cannot find matched key, use the random one.")
             retVec = states[random.choice(list(states.keys()))]
-        return retVec
+        return np.asarray(retVec)
 
     def calcEachReward(self, info):
         pass
@@ -180,7 +212,6 @@ class Worker(object):
                 Choose the features from the most inflential function
                 '''
                 state = self.getMostInfluentialState(states, ResetInfo)
-                sys.exit(1)
                 action = self.ppo.choose_action(state)
                 nextStates, reward, done, info = self.env.step(action)
                 '''
@@ -193,6 +224,8 @@ class Worker(object):
                 Calculate actual rewards for all functions
                 '''
                 rewards = self.calcEachReward(info)
+                #TODO
+                sys.exit(1)
 
                 '''
                 Match the states and rewards
