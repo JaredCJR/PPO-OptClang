@@ -23,7 +23,7 @@ import gym, gym_OptClang
 import random, threading, queue, operator, os, sys, re
 
 EP_MAX = 1000
-N_WORKER = 5                # parallel workers
+N_WORKER = 1                # parallel workers
 GAMMA = 0.9                 # reward discount factor
 A_LR = 0.0001               # learning rate for actor
 C_LR = 0.0002               # learning rate for critic
@@ -94,6 +94,9 @@ class PPO(object):
         return norm_dist, params
 
     def choose_action(self, s):
+        """
+        return a int from 0 to 33
+        """
         s = s[np.newaxis, :]
         a = self.sess.run(self.sample_op, {self.tfs: s})[0]
         #FIXME: how to choose the action?
@@ -120,8 +123,8 @@ class Worker(object):
         return an numpy array object.
         """
         retVec = None
-        stats = ResetInfo["FunctionUsageDict"]
-        if not stats.items():
+        Stats = ResetInfo["FunctionUsageDict"]
+        if not Stats.items():
             '''
             nothing profiled, random select
             '''
@@ -130,8 +133,7 @@ class Worker(object):
             '''
             select the function with the maximum usage
             '''
-            key = max(stats.items(), key=operator.itemgetter(1))[0]
-
+            key = max(Stats.items(), key=operator.itemgetter(1))[0]
         try:
             retVec = states[key]
         except KeyError:
@@ -139,52 +141,86 @@ class Worker(object):
             Random selection will never come to here.
             This is caused by perf profiled information which does not contain function arguments.
             '''
-            print("Using re to search C++ style name\nKey error:\nkey={}\ndict.keys()={}\n".format(key, states.keys()))
+            #print("Using re to search C++ style name\nKey error:\nkey={}\ndict.keys()={}\n".format(key, states.keys()))
             try:
                 FunctionList = list(states.keys())
-                newFunctionList = []
-                rglexKey = key.replace(' ', '')
-                for func in FunctionList:
-                    newFunctionList.append(func.replace(' ', ''))
-                FunctionList = newFunctionList
                 done = False
-                # try the one with maximum usage
-                for func in FunctionList:
-                    matched = re.search(re.escape(func), rglexKey)
-                    if matched is not None:
-                        retVec = states[matched.group[0]]
-                        done = True
-                        break
                 # build list of [key, usage]
                 UsageList = []
-                for name, usage in stats.items():
+                for name, usage in Stats.items():
                     UsageList.append([name, usage])
                 # based on the usage, sort it
                 sorted(UsageList, key=operator.itemgetter(1), reverse=True)
                 # if not found, try others based on the usage.
                 if retVec is None:
-                    for usage in UsageList[1:]: # the first one is tried above.
+                    for usage in UsageList:
                         key = usage[0]
-                        rglexKey = key.replace(' ', '')
+                        rglexKey = key
                         for func in FunctionList:
                             matched = re.search(re.escape(func), rglexKey)
                             if matched is not None:
-                                retVec = states[matched.group[0]]
+                                key = matched.group(0)
+                                retVec = states[key]
                                 done = True
                                 break
                         if done:
                             break
+                        else:
+                            ReEscapedInput = re.escape(rglexKey)
+                            SearchTarget = ".*{func}.*".format(func=ReEscapedInput)
+                            r = re.compile(SearchTarget)
+                            reRetList = list(filter(r.search, FunctionList))
+                            if reRetList:
+                                key = reRetList[0]
+                                retVec = states[key]
+                                done = True
+                                break
             except Exception as e:
-                print("RegExp exception\nKey error:\nkey={}\nrglexKey={}\ndict.keys()={}\nmatched={}\nreason={}\n".format(key, rglexKey, states.keys()), matched, e)
+                #print("RegExp exception\nKey error:\nkey={}\nrglexKey={}\ndict.keys()={}\nmatched={}\nreason={}\n".format(key, rglexKey, states.keys()), matched, e)
         except e:
             print("Unexpected exception\nKey error:\nkey={}\ndict.keys()={}\nreason={}\n".format(key, states.keys()), e)
         if retVec is None:
-            print("Cannot find matched key, use the random one.")
+            #print("Cannot find matched key, use the random one.")
             retVec = states[random.choice(list(states.keys()))]
+        print(key)
         return np.asarray(retVec)
 
-    def calcEachReward(self, info):
-        pass
+    def RegExpSearch(self, TargetName, List):
+        """
+        Use regular exp. to search whether the List contains the TargetName.
+        TargetName: the name you would like to find.
+        List: list of candidates for searching.
+        """
+        retName = None
+        done = False
+        for candidate in List:
+            matched = re.search(re.escape(TargetName), candidate)
+            if matched is not None:
+                retName = matched.group(0)
+                done = True
+                break
+        if not done:
+            ReEscapedInput = re.escape(TargetName)
+            SearchTarget = ".*{name}.*".format(name=ReEscapedInput)
+            r = re.compile(SearchTarget)
+            reRetList = list(filter(r.search, List))
+            if reRetList:
+                retName = reRetList[0]
+        return retName
+
+    def calcEachReward(self, info, MeanSigmaDict):
+        """
+        return dict={"function-name": reward(float)}
+        """
+        Stats = info["FunctionUsageDict"]
+        TotalCycles = info["TotalCyclesStat"]
+        Target = info["Target"]
+        '''
+        Generate dict for profiled function with usage from regexp.
+        '''
+        '''
+        Calculate real reward based on the usage-dict and MeanSigmaDict
+        '''
 
     def appendStateRewards(self, buffer_s, buffer_a, buffer_r, states, rewards, action):
         pass
@@ -195,6 +231,34 @@ class Worker(object):
     def calcEpisodeReward(self, rewards):
         pass
 
+    def getCpuMeanSigmaInfo(self):
+        """
+        return a dict{"target name": {"mean": int, "sigma": int}}
+        """
+        path = os.getenv('LLVM_THESIS_RandomHome', 'Error')
+        if path == 'Error':
+            print("$LLVM_THESIS_RandomHome is not defined, exit!", file=sys.stderr)
+            sys.exit(1)
+        path = path + '/LLVMTestSuiteScript/GraphGen/output/newMeasurableStdBenchmarkMeanAndSigma'
+        if not os.path.exists(path):
+            print("{} does not exist.".format(path), file=sys.stderr)
+            sus.exit(1)
+        retDict = {}
+        with open(path, 'r') as file:
+            for line in file:
+                '''
+                ex.
+                PAQ8p/paq8p; cpu-cycles-mean | 153224947840; cpu-cycles-sigma | 2111212874
+                '''
+                lineList = line.split(';')
+                for item in lineList:
+                    name = item[0].split('/')[-1].strip()
+                    mean = int(item[1].split('|')[-1].strip())
+                    sigma = int(item[2].split('|')[-1].strip())
+                    retDict[name] = {'mean':mean, 'sigma':sigma}
+            file.close()
+        return retDict
+
     def work(self):
         global GLOBAL_EP, GLOBAL_RUNNING_R, GLOBAL_UPDATE_COUNTER
         while not COORD.should_stop():
@@ -204,6 +268,7 @@ class Worker(object):
             states, ResetInfo = self.env.reset()
             EpisodeReward = 0
             buffer_s, buffer_a, buffer_r = [], [], []
+            TargetMeanSigmaDict = self.getCpuMeanSigmaInfo()
             while True:
                 if not ROLLING_EVENT.is_set():                  # while global PPO is updating
                     ROLLING_EVENT.wait()                        # wait until PPO is updated
@@ -223,7 +288,7 @@ class Worker(object):
                 '''
                 Calculate actual rewards for all functions
                 '''
-                rewards = self.calcEachReward(info)
+                rewards = self.calcEachReward(info, TargetMeanSigmaDict)
                 #TODO
                 sys.exit(1)
 
