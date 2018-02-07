@@ -134,12 +134,13 @@ class Worker(object):
             select the function with the maximum usage
             '''
             key = max(Stats.items(), key=operator.itemgetter(1))[0]
+        #key = "hi_function"
         try:
             retVec = states[key]
         except KeyError:
             '''
             Random selection will never come to here.
-            This is caused by perf profiled information which does not contain function arguments.
+            This is caused by perf profiled information which does not contain the function arguments.
             '''
             #print("Using re to search C++ style name\nKey error:\nkey={}\ndict.keys()={}\n".format(key, states.keys()))
             try:
@@ -151,52 +152,42 @@ class Worker(object):
                     UsageList.append([name, usage])
                 # based on the usage, sort it
                 sorted(UsageList, key=operator.itemgetter(1), reverse=True)
-                # if not found, try others based on the usage.
-                if retVec is None:
-                    for usage in UsageList:
-                        key = usage[0]
-                        rglexKey = key
-                        for func in FunctionList:
-                            matched = re.search(re.escape(func), rglexKey)
-                            if matched is not None:
-                                key = matched.group(0)
-                                retVec = states[key]
-                                done = True
-                                break
-                        if done:
-                            break
-                        else:
-                            ReEscapedInput = re.escape(rglexKey)
-                            SearchTarget = ".*{func}.*".format(func=ReEscapedInput)
-                            r = re.compile(SearchTarget)
-                            reRetList = list(filter(r.search, FunctionList))
-                            if reRetList:
-                                key = reRetList[0]
-                                retVec = states[key]
-                                done = True
-                                break
+                # use RegExp to search C++ style name or ambiguity of arguments.
+                NameList = []
+                UsageTmpList = []
+                done = False
+                for item in UsageList:
+                    NameList.append(item[0])
+                    UsageTmpList.append(item[1])
+                for cand in NameList:
+                    # searching based on the usage order in descending.
+                    realKey = self.RegExpSearch(cand, FunctionList)
+                    if realKey is not None:
+                        done = True
+                        break
+                if not done:
+                    # if we cannot find the key, use the random one.
+                    realKey = random.choice(FunctionList)
+                retVec = states[realKey]
             except Exception as e:
-                #print("RegExp exception\nKey error:\nkey={}\nrglexKey={}\ndict.keys()={}\nmatched={}\nreason={}\n".format(key, rglexKey, states.keys()), matched, e)
-        except e:
-            print("Unexpected exception\nKey error:\nkey={}\ndict.keys()={}\nreason={}\n".format(key, states.keys()), e)
-        if retVec is None:
-            #print("Cannot find matched key, use the random one.")
-            retVec = states[random.choice(list(states.keys()))]
-        print(key)
+                print("Unexpected exception\nkey={}\nrealKey={}\ndict.keys()={}\nreason={}\n".format(key, realKey ,states.keys()), e)
         return np.asarray(retVec)
 
     def RegExpSearch(self, TargetName, List):
         """
         Use regular exp. to search whether the List contains the TargetName.
-        TargetName: the name you would like to find.
-        List: list of candidates for searching.
+        Inputs:
+            TargetName: the name you would like to find.
+            List: list of candidates for searching.
+        Return:
+            The matched name in List or None
         """
         retName = None
         done = False
         for candidate in List:
             matched = re.search(re.escape(TargetName), candidate)
             if matched is not None:
-                retName = matched.group(0)
+                retName = candidate
                 done = True
                 break
         if not done:
@@ -208,21 +199,127 @@ class Worker(object):
                 retName = reRetList[0]
         return retName
 
-    def calcEachReward(self, info, MeanSigmaDict):
+    def calcEachReward(self, newInfo, MeanSigmaDict, Features, oldInfo, oldCycles, FirstEpi=False):
         """
         return dict={"function-name": reward(float)}
+
+        if FirstEpi == True:
+            oldInfo will be the ResetInfo
+        if FirstEpi == False:
+            oldInfo will be the usage dict from last epi.
         """
-        Stats = info["FunctionUsageDict"]
-        TotalCycles = info["TotalCyclesStat"]
-        Target = info["Target"]
+        Stats = newInfo["FunctionUsageDict"]
+        TotalCycles = newInfo["TotalCyclesStat"]
+        Target = newInfo["Target"]
         '''
-        Generate dict for profiled function with usage from regexp.
+        Generate dict for function name mapping between perf style and clang style
+        (Info["FunctionUsageDict"] <--> Features)
+        {"perf_style_name": "clang_style_name"}
         '''
+        NameMapDict = {}
+        AllFunctions = list(Features.keys())
+        for perfName in list(Stats.keys()):
+            NameMapDict[perfName] = self.RegExpSearch(perfName, AllFunctions)
         '''
-        Calculate real reward based on the usage-dict and MeanSigmaDict
+        Create usage dict with clang_style_name as key.
+        if not profiled, the value will be None
         '''
+        newAllUsageDict = {k : None for k in AllFunctions}
+        for perf_name, clang_name in NameMapDict.items():
+            newAllUsageDict[clang_name] = Stats[perf_name]
+        '''
+        Prepare the old usage dict
+        '''
+        if FirstEpi == True:
+            resetStats = oldInfo["FunctionUsageDict"]
+            resetNameMapDict = {}
+            resetAllFunctions = list(Features.keys())
+            for perfName in list(resetStats.keys()):
+                resetNameMapDict[perfName] = self.RegExpSearch(perfName, resetAllFunctions)
+            oldAllUsageDict = {k : None for k in resetAllFunctions}
+            for perf_name, clang_name in resetNameMapDict.items():
+                oldAllUsageDict[clang_name] = resetStats[perf_name]
+        else:
+            oldAllUsageDict = oldInfo
+        '''
+        Calculate real reward based on the (new/old)AllUsageDict and MeanSigmaDict for all functions
+        '''
+        rewards = {f : None for f in AllFunctions}
+        target = newInfo['Target']
+        old_total_cycles = oldCycles
+        new_total_cycles = TotalCycles
+        delta_total_cycles = old_total_cycles - new_total_cycles
+        abs_delta_total_cycles = abs(delta_total_cycles)
+        sigma_total_cycles = MeanSigmaDict[target]['sigma']
+        '''
+        95% of results are in the twice sigma.
+        Therefore, 2x is necessary.
+        '''
+        SigmaRatio = abs((abs_delta_total_cycles - sigma_total_cycles)/(2*sigma_total_cycles))
+        UsageNumOverAll = 0
+        for name, usage in newAllUsageDict.items():
+            if usage is not None:
+                UsageNumOverAll += 1
+        UsageProfiledRatio = UsageNumOverAll/len(newAllUsageDict)
+        for FunctionName in AllFunctions:
+            old_usage = oldAllUsageDict[FunctionName]
+            new_usage = newAllUsageDict[FunctionName]
+            UseOverallPerf = False
+            '''
+            The alpha need to be tuned.
+            '''
+            Alpha = 2 #FIXME
+            isSpeedup = False
+            isSlowDown = False
+            if old_usage is None and new_usage is None:
+                '''
+                This function does not matters
+                '''
+                UseOverallPerf = True
+            elif old_usage is None:
+                '''
+                may be slow down
+                '''
+                UseOverallPerf = True
+                Alpha *= 2
+                isSlowDown = True
+            elif new_usage is None:
+                '''
+                may be speedup
+                '''
+                UseOverallPerf = True
+                Alpha *= 2
+                isSpeedup = True
+            else:
+                '''
+                This may be more accurate
+                How important: based on how many functions are profiled.
+                '''
+                UseOverallPerf = False
+                coeff = 3
+                Alpha = Alpha*(coeff*(1 / UsageProfiledRatio))
+            if UseOverallPerf:
+                if isSlowDown == True and delta_total_cycles > 0:
+                    Alpha /= 4
+                    delta_total_cycles *= -1
+                elif isSpeedup == True and delta_total_cycles < 0:
+                    Alpha /= 4
+                    delta_total_cycles *= -1
+                reward = Alpha*SigmaRatio*(delta_total_cycles/old_total_cycles)
+            else:
+                old_function_cycles = old_total_cycles * old_usage
+                new_function_cycles = new_total_cycles * new_usage
+                delta_function_cycles = old_function_cycles - new_function_cycles
+                reward = Alpha*SigmaRatio*(delta_function_cycles/old_function_cycles)
+            print("FunctionName={}, reward={}".format(FunctionName, reward))
+            rewards[FunctionName] = reward
+        print("UsageProfiledRatio={}".format(UsageProfiledRatio))
+        # return newAllUsageDict to be the "old" for next episode
+        return rewards, newAllUsageDict
 
     def appendStateRewards(self, buffer_s, buffer_a, buffer_r, states, rewards, action):
+        #FIXME: if the name is ''(empty) skip it.
+        #TODO: do we need to discard some results that the rewards are not that important?
         pass
 
     def calcDiscountedRewards(self, buffer_r, GAMMA):
@@ -251,11 +348,10 @@ class Worker(object):
                 PAQ8p/paq8p; cpu-cycles-mean | 153224947840; cpu-cycles-sigma | 2111212874
                 '''
                 lineList = line.split(';')
-                for item in lineList:
-                    name = item[0].split('/')[-1].strip()
-                    mean = int(item[1].split('|')[-1].strip())
-                    sigma = int(item[2].split('|')[-1].strip())
-                    retDict[name] = {'mean':mean, 'sigma':sigma}
+                name = lineList[0].split('/')[-1].strip()
+                mean = int(lineList[1].split('|')[-1].strip())
+                sigma = int(lineList[2].split('|')[-1].strip())
+                retDict[name] = {'mean':mean, 'sigma':sigma}
             file.close()
         return retDict
 
@@ -269,10 +365,23 @@ class Worker(object):
             EpisodeReward = 0
             buffer_s, buffer_a, buffer_r = [], [], []
             TargetMeanSigmaDict = self.getCpuMeanSigmaInfo()
+            FirstEpi = True
             while True:
                 if not ROLLING_EVENT.is_set():                  # while global PPO is updating
                     ROLLING_EVENT.wait()                        # wait until PPO is updated
                     buffer_s, buffer_a, buffer_r = [], [], []   # clear history buffer, use new policy to collect data
+                '''
+                Save the last profiled info to calculate real rewards
+                '''
+                if FirstEpi:
+                    oldCycles = ResetInfo["TotalCyclesStat"]
+                    oldInfo = ResetInfo
+                    FirstEpi = False
+                    isUsageNotProcessed = True
+                else:
+                    oldCycles = info["TotalCyclesStat"]
+                    oldInfo = oldAllUsage
+                    isUsageNotProcessed = False
                 '''
                 Choose the features from the most inflential function
                 '''
@@ -288,14 +397,16 @@ class Worker(object):
                 '''
                 Calculate actual rewards for all functions
                 '''
-                rewards = self.calcEachReward(info, TargetMeanSigmaDict)
-                #TODO
-                sys.exit(1)
+                rewards, oldAllUsage = self.calcEachReward(info,
+                        TargetMeanSigmaDict, nextStates, oldInfo,
+                        oldCycles, isUsageNotProcessed)
 
                 '''
                 Match the states and rewards
                 '''
                 self.appendStateRewards(buffer_s, buffer_a, buffer_r, states, rewards, action)
+                #TODO
+                sys.exit(1)
 
                 '''
                 Calculate overall reward for plotting
