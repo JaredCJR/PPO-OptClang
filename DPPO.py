@@ -96,10 +96,15 @@ class PPO(object):
     def choose_action(self, s):
         """
         return a int from 0 to 33
+        In the world of reinforcement learning, the action space is from 0 to 33.
+        However, in the world of modified-clang, the accepted passes are from 1 to 34.
+        Therefore, "gym-OptClang" already done this effort for us.
+        We don't have to bother this by ourselves.
         """
         s = s[np.newaxis, :]
         a = self.sess.run(self.sample_op, {self.tfs: s})[0]
         #FIXME: how to choose the action?
+        #choose the one that was not applied yet?
         return a.argmax()
 
     def get_v(self, s):
@@ -266,9 +271,10 @@ class Worker(object):
             new_usage = newAllUsageDict[FunctionName]
             UseOverallPerf = False
             '''
-            The alpha need to be tuned.
+            The Alpha and Beta need to be tuned.
             '''
-            Alpha = 2 #FIXME
+            Alpha = 2
+            Beta = 2
             isSpeedup = False
             isSlowDown = False
             if old_usage is None and new_usage is None:
@@ -281,14 +287,14 @@ class Worker(object):
                 may be slow down
                 '''
                 UseOverallPerf = True
-                Alpha *= 2
+                Alpha *= Beta
                 isSlowDown = True
             elif new_usage is None:
                 '''
                 may be speedup
                 '''
                 UseOverallPerf = True
-                Alpha *= 2
+                Alpha *= Beta
                 isSpeedup = True
             else:
                 '''
@@ -296,14 +302,13 @@ class Worker(object):
                 How important: based on how many functions are profiled.
                 '''
                 UseOverallPerf = False
-                coeff = 3
-                Alpha = Alpha*(coeff*(1 / UsageProfiledRatio))
+                Alpha = Alpha*(Beta*(1 / UsageProfiledRatio))
             if UseOverallPerf:
                 if isSlowDown == True and delta_total_cycles > 0:
-                    Alpha /= 4
+                    Alpha /= Beta
                     delta_total_cycles *= -1
                 elif isSpeedup == True and delta_total_cycles < 0:
-                    Alpha /= 4
+                    Alpha /= Beta
                     delta_total_cycles *= -1
                 reward = Alpha*SigmaRatio*(delta_total_cycles/old_total_cycles)
             else:
@@ -311,18 +316,38 @@ class Worker(object):
                 new_function_cycles = new_total_cycles * new_usage
                 delta_function_cycles = old_function_cycles - new_function_cycles
                 reward = Alpha*SigmaRatio*(delta_function_cycles/old_function_cycles)
-            print("FunctionName={}, reward={}".format(FunctionName, reward))
+            #print("FunctionName={}, reward={}".format(FunctionName, reward))
+            #print("Alpha={}".format(Alpha))
             rewards[FunctionName] = reward
-        print("UsageProfiledRatio={}".format(UsageProfiledRatio))
+        #print("UsageProfiledRatio={}".format(UsageProfiledRatio))
         # return newAllUsageDict to be the "old" for next episode
         return rewards, newAllUsageDict
 
     def appendStateRewards(self, buffer_s, buffer_a, buffer_r, states, rewards, action):
-        #FIXME: if the name is ''(empty) skip it.
-        #TODO: do we need to discard some results that the rewards are not that important?
-        pass
+        #FIXME: do we need to discard some results that the rewards are not that important?
+        """
+        No return value, they are append inplace in buffer_x
+        buffer_s : list of np.array as features
+        buffer_a : list of actions(int)
+        buffer_r : list of rewards(float)
+        """
+        for name, featureList in states.items():
+            # For some reason, the name may be '' (skip it!)
+            if not name:
+                continue
+            buffer_s.append(np.asarray(featureList, dtype=np.uint32))
+            buffer_a.append(action)
+            buffer_r.append(rewards[name])
+
+
 
     def calcDiscountedRewards(self, buffer_r, GAMMA):
+        '''
+        Get estimated rewards from critic for all functions
+        '''
+        '''
+        Calculate discounted rewards for all functions
+        '''
         pass
 
     def calcEpisodeReward(self, rewards):
@@ -364,7 +389,7 @@ class Worker(object):
             states, ResetInfo = self.env.reset()
             EpisodeReward = 0
             buffer_s, buffer_a, buffer_r = [], [], []
-            TargetMeanSigmaDict = self.getCpuMeanSigmaInfo()
+            MeanSigmaDict = self.getCpuMeanSigmaInfo()
             FirstEpi = True
             while True:
                 if not ROLLING_EVENT.is_set():                  # while global PPO is updating
@@ -398,20 +423,20 @@ class Worker(object):
                 Calculate actual rewards for all functions
                 '''
                 rewards, oldAllUsage = self.calcEachReward(info,
-                        TargetMeanSigmaDict, nextStates, oldInfo,
+                        MeanSigmaDict, nextStates, oldInfo,
                         oldCycles, isUsageNotProcessed)
 
                 '''
                 Match the states and rewards
                 '''
                 self.appendStateRewards(buffer_s, buffer_a, buffer_r, states, rewards, action)
-                #TODO
-                sys.exit(1)
 
                 '''
                 Calculate overall reward for plotting
                 '''
+                #TODO
                 EpisodeReward = self.calcEpisodeReward(rewards)
+                sys.exit(1)
 
                 # add the generated results
                 CounterLock.acquire()
