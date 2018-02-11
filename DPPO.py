@@ -351,7 +351,16 @@ class Worker(object):
         pass
 
     def calcEpisodeReward(self, rewards):
-        pass
+        """
+        return the average reward.
+        """
+        total = 0.0
+        count = 0.0
+        for name, reward in rewards.items():
+            total += reward
+            count += 1.0
+        return total / count
+
 
     def getCpuMeanSigmaInfo(self):
         """
@@ -434,19 +443,21 @@ class Worker(object):
                 '''
                 Calculate overall reward for plotting
                 '''
-                #TODO
                 EpisodeReward = self.calcEpisodeReward(rewards)
-                sys.exit(1)
 
                 # add the generated results
                 CounterLock.acquire()
                 GLOBAL_UPDATE_COUNTER += len(nextStates.keys())
                 CounterLock.release()
-                if GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE or done:
+                #FIXME
+                if True:
+                #if GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE or done:
                     '''
                     Calculate discounted rewards for all functions
                     '''
                     discounted_r = self.calcDiscountedRewards(buffer_r, GAMMA)
+                    #TODO
+                    sys.exit(1)
 
                     bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.array(discounted_r)[:, np.newaxis]
                     buffer_s, buffer_a, buffer_r = [], [], []
