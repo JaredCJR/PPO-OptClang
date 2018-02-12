@@ -346,18 +346,29 @@ class Worker(object):
 
 
     def calcDiscountedRewards(self, buffer_r, nextObs):
+        """
+        return a dict of list of discounted rewards
+        {"function-name":[discounted rewards]}
+        """
         global GAMMA
+        retDict = {}
         for name, FeatureList in nextObs.items():
             '''
-            Get estimated rewards from critic for all functions
+            Get estimated rewards from critic
             '''
             nextOb = np.asarray(FeatureList, dtype=np.uint32)
             StateValue = self.ppo.get_v(nextOb)
-            #TODO
-        '''
-        Calculate discounted rewards for all functions
-        '''
-        pass
+            discounted_r = []
+            for r in buffer_r[name][::-1]:
+                '''
+                Calculate discounted rewards
+                '''
+                StateValue = r + GAMMA * StateValue
+                discounted_r.append(StateValue)
+            discounted_r.reverse()
+            retDict[name] = discounted_r
+        return retDict
+
 
     def calcEpisodeReward(self, rewards):
         """
@@ -397,6 +408,19 @@ class Worker(object):
                 retDict[name] = {'mean':mean, 'sigma':sigma}
             file.close()
         return retDict
+
+    def DictToVstack(self, buffer_s, buffer_a, buffer_r):
+        """
+        return vstack of state, action and rewards.
+        """
+        list_s = []
+        list_a = []
+        list_r = []
+        for name, values in buffer_s.items():
+            list_s.extend(buffer_s[name])
+            list_a.extend(buffer_a[name])
+            list_r.extend(buffer_r[name])
+        return np.vstack(list_s), np.vstack(list_a), np.vstack(list_r)
 
     def work(self):
         global GLOBAL_EP, GLOBAL_RUNNING_R, GLOBAL_UPDATE_COUNTER
@@ -465,14 +489,22 @@ class Worker(object):
                     Calculate discounted rewards for all functions
                     '''
                     discounted_r = self.calcDiscountedRewards(buffer_r, nextStates)
+                    '''
+                    Convert dict of list into row-array
+                    '''
+                    vstack_s, vstack_a, vstack_r = self.DictToVstack(buffer_s, buffer_a, discounted_r)
+                    print(vstack_s)
+                    print("-----------------------------")
+                    print(vstack_a)
+                    print("-----------------------------")
+                    print(vstack_r)
+                    print("-----------------------------")
                     #TODO
                     sys.exit(1)
-                    #FIXME: prev is list, now is dict
-                    bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.array(discounted_r)[:, np.newaxis]
                     buffer_s, buffer_a, buffer_r = {}, {}, {}
 
                     QueueLock.acquire()
-                    QUEUE.put(np.hstack((bs, ba, br)))          # put data in the shared queue
+                    QUEUE.put(np.hstack((vstack_s, vstack_a, vstack_r)))          # put data in the shared queue
                     QueueLock.release()
 
                     if GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE:
