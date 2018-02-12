@@ -327,24 +327,33 @@ class Worker(object):
         #FIXME: do we need to discard some results that the rewards are not that important?
         """
         No return value, they are append inplace in buffer_x
-        buffer_s : list of np.array as features
-        buffer_a : list of actions(int)
-        buffer_r : list of rewards(float)
+        buffer_s : dict of list of np.array as features
+        buffer_a : dict of list of actions(int)
+        buffer_r : dict of list of rewards(float)
         """
         for name, featureList in states.items():
             # For some reason, the name may be '' (skip it!)
             if not name:
                 continue
-            buffer_s.append(np.asarray(featureList, dtype=np.uint32))
-            buffer_a.append(action)
-            buffer_r.append(rewards[name])
+            if buffer_s.get(name) is None:
+                buffer_s[name] = []
+                buffer_a[name] = []
+                buffer_r[name] = []
+            buffer_s[name].append(np.asarray(featureList, dtype=np.uint32))
+            buffer_a[name].append(action)
+            buffer_r[name].append(rewards[name])
 
 
 
-    def calcDiscountedRewards(self, buffer_r, GAMMA):
-        '''
-        Get estimated rewards from critic for all functions
-        '''
+    def calcDiscountedRewards(self, buffer_r, nextObs):
+        global GAMMA
+        for name, FeatureList in nextObs.items():
+            '''
+            Get estimated rewards from critic for all functions
+            '''
+            nextOb = np.asarray(FeatureList, dtype=np.uint32)
+            StateValue = self.ppo.get_v(nextOb)
+            #TODO
         '''
         Calculate discounted rewards for all functions
         '''
@@ -397,13 +406,13 @@ class Worker(object):
             PlotEpiLock = self.SharedLocks[2]
             states, ResetInfo = self.env.reset()
             EpisodeReward = 0
-            buffer_s, buffer_a, buffer_r = [], [], []
+            buffer_s, buffer_a, buffer_r = {}, {}, {}
             MeanSigmaDict = self.getCpuMeanSigmaInfo()
             FirstEpi = True
             while True:
                 if not ROLLING_EVENT.is_set():                  # while global PPO is updating
                     ROLLING_EVENT.wait()                        # wait until PPO is updated
-                    buffer_s, buffer_a, buffer_r = [], [], []   # clear history buffer, use new policy to collect data
+                    buffer_s, buffer_a, buffer_r = {}, {}, {}   # clear history buffer, use new policy to collect data
                 '''
                 Save the last profiled info to calculate real rewards
                 '''
@@ -455,12 +464,12 @@ class Worker(object):
                     '''
                     Calculate discounted rewards for all functions
                     '''
-                    discounted_r = self.calcDiscountedRewards(buffer_r, GAMMA)
+                    discounted_r = self.calcDiscountedRewards(buffer_r, nextStates)
                     #TODO
                     sys.exit(1)
-
+                    #FIXME: prev is list, now is dict
                     bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.array(discounted_r)[:, np.newaxis]
-                    buffer_s, buffer_a, buffer_r = [], [], []
+                    buffer_s, buffer_a, buffer_r = {}, {}, {}
 
                     QueueLock.acquire()
                     QUEUE.put(np.hstack((bs, ba, br)))          # put data in the shared queue
