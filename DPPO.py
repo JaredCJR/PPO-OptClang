@@ -67,22 +67,25 @@ class PPO(object):
         self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss)
         self.sess.run(tf.global_variables_initializer())
 
-    def update(self):
+    def update(self, SharedQueue, CollectEvent, UpdateEvent):
         global GLOBAL_UPDATE_COUNTER
         while not COORD.should_stop():
             if GLOBAL_EP < EP_MAX:
-                UPDATE_EVENT.wait()                     # wait until get batch of data
-                self.sess.run(self.update_oldpi_op)     # copy pi to old pi
-                data = [QUEUE.get() for _ in range(QUEUE.qsize())]      # collect data from all workers
+                # wait until get batch of data
+                UpdateEvent.wait()
+                # copy pi to old pi
+                self.sess.run(self.update_oldpi_op)
+                # collect data from all workers
+                data = [SharedQueue.get() for _ in range(SharedQueue.qsize())]
                 data = np.vstack(data)
                 s, a, r = data[:, :self.S_DIM], data[:, self.S_DIM: self.S_DIM + self.A_DIM], data[:, -1:]
                 adv = self.sess.run(self.advantage, {self.tfs: s, self.tfdc_r: r})
                 # update actor and critic in a update loop
                 [self.sess.run(self.atrain_op, {self.tfs: s, self.tfa: a, self.tfadv: adv}) for _ in range(UPDATE_STEP)]
                 [self.sess.run(self.ctrain_op, {self.tfs: s, self.tfdc_r: r}) for _ in range(UPDATE_STEP)]
-                UPDATE_EVENT.clear()        # updating finished
+                UpdateEvent.clear()        # updating finished
                 GLOBAL_UPDATE_COUNTER = 0   # reset counter
-                ROLLING_EVENT.set()         # set roll-out available
+                CollectEvent.set()         # set collecting available
 
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
@@ -104,7 +107,7 @@ class PPO(object):
         s = s[np.newaxis, :]
         a = self.sess.run(self.sample_op, {self.tfs: s})[0]
         #FIXME: how to choose the action?
-        #choose the one that was not applied yet?
+        #TODO:choose the one that was not applied yet
         return a.argmax()
 
     def get_v(self, s):
@@ -113,11 +116,12 @@ class PPO(object):
 
 
 class Worker(object):
-    def __init__(self, WorkerID, Locks, GAME):
+    def __init__(self, WorkerID, Locks, GAME, Events):
         self.wid = WorkerID
         self.env = gym.make(GAME).unwrapped
         self.ppo = PPO(self.env)
         self.SharedLocks = Locks
+        self.SharedEvents = Events
 
     def getMostInfluentialState(self, states, ResetInfo):
         """
@@ -332,15 +336,20 @@ class Worker(object):
         buffer_r : dict of list of rewards(float)
         """
         for name, featureList in states.items():
-            # For some reason, the name may be '' (skip it!)
+            # For some reason, the name may be '' (remove it!)
             if not name:
+                buffer_s.pop('', None)
+                buffer_a.pop('', None)
+                buffer_r.pop('', None)
                 continue
             if buffer_s.get(name) is None:
                 buffer_s[name] = []
                 buffer_a[name] = []
                 buffer_r[name] = []
             buffer_s[name].append(np.asarray(featureList, dtype=np.uint32))
-            buffer_a[name].append(action)
+            actionFeature = [0]*34
+            actionFeature[action] = 1
+            buffer_a[name].append(actionFeature)
             buffer_r[name].append(rewards[name])
 
 
@@ -422,20 +431,22 @@ class Worker(object):
             list_r.extend(buffer_r[name])
         return np.vstack(list_s), np.vstack(list_a), np.vstack(list_r)
 
-    def work(self):
+    def work(self, SharedQueue):
         global GLOBAL_EP, GLOBAL_RUNNING_R, GLOBAL_UPDATE_COUNTER
         while not COORD.should_stop():
-            QueueLock = self.SharedLocks[0]
-            CounterLock = self.SharedLocks[1]
-            PlotEpiLock = self.SharedLocks[2]
+            QueueLock = self.SharedLocks['queue']
+            CounterLock = self.SharedLocks['counter']
+            PlotEpiLock = self.SharedLocks['plot_epi']
+            CollectEvent = self.SharedEvents['collect']
+            UpdateEvent = self.SharedEvents['update']
             states, ResetInfo = self.env.reset()
             EpisodeReward = 0
             buffer_s, buffer_a, buffer_r = {}, {}, {}
             MeanSigmaDict = self.getCpuMeanSigmaInfo()
             FirstEpi = True
             while True:
-                if not ROLLING_EVENT.is_set():                  # while global PPO is updating
-                    ROLLING_EVENT.wait()                        # wait until PPO is updated
+                if not CollectEvent.is_set():                  # while global PPO is updating
+                    CollectEvent.wait()                        # wait until PPO is updated
                     buffer_s, buffer_a, buffer_r = {}, {}, {}   # clear history buffer, use new policy to collect data
                 '''
                 Save the last profiled info to calculate real rewards
@@ -493,23 +504,19 @@ class Worker(object):
                     Convert dict of list into row-array
                     '''
                     vstack_s, vstack_a, vstack_r = self.DictToVstack(buffer_s, buffer_a, discounted_r)
-                    print(vstack_s)
-                    print("-----------------------------")
-                    print(vstack_a)
-                    print("-----------------------------")
-                    print(vstack_r)
-                    print("-----------------------------")
-                    #TODO
-                    sys.exit(1)
+                    '''
+                    Split each of vector and assemble into a queue element.
+                    '''
+                    QueueLock.acquire()
+                    # put data in the shared queue
+                    for index, item in enumerate(vstack_s):
+                        SharedQueue.put(np.hstack((vstack_s[index], vstack_a[index], vstack_r[index])))
+                    QueueLock.release()
                     buffer_s, buffer_a, buffer_r = {}, {}, {}
 
-                    QueueLock.acquire()
-                    QUEUE.put(np.hstack((vstack_s, vstack_a, vstack_r)))          # put data in the shared queue
-                    QueueLock.release()
-
                     if GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE:
-                        ROLLING_EVENT.clear()       # stop collecting data
-                        UPDATE_EVENT.set()          # globalPPO update
+                        CollectEvent.clear()       # stop collecting data
+                        UpdateEvent.set()          # globalPPO update
 
                     if GLOBAL_EP >= EP_MAX:         # stop training
                         COORD.request_stop()
@@ -537,30 +544,35 @@ if __name__ == '__main__':
     if os.path.exists(WorkerListLoc):
         os.remove(WorkerListLoc)
 
-    UPDATE_EVENT, ROLLING_EVENT = threading.Event(), threading.Event()
-    UPDATE_EVENT.clear()            # not update now
-    ROLLING_EVENT.set()             # start to roll out
+    Events = {}
+    Events['update'] = threading.Event()
+    Events['update'].clear()            # not update now
+    Events['collect'] = threading.Event()
+    Events['collect'].set()             # start to collect
     # prevent race condition with 3 locks
     #TODO: release all lock when sigterm
-    Locks = []
-    for i in range(3):
-        Locks.append(threading.Lock())
+    Locks = {}
+    Locks['queue'] = threading.Lock()
+    Locks['counter'] = threading.Lock()
+    Locks['plot_epi'] = threading.Lock()
     workers = []
     for i in range(N_WORKER):
-        workers.append(Worker(WorkerID=i, Locks=Locks, GAME=Game))
+        workers.append(Worker(WorkerID=i, Locks=Locks, GAME=Game, Events=Events))
 
     GLOBAL_UPDATE_COUNTER, GLOBAL_EP = 0, 0
     GLOBAL_PPO = PPO(gym.make(Game).unwrapped)
     GLOBAL_RUNNING_R = []
     COORD = tf.train.Coordinator()
-    QUEUE = queue.Queue()           # workers putting data in this queue
+    # workers putting data in this queue
+    SharedQueue = queue.Queue()
     threads = []
     for worker in workers:          # worker threads
-        t = threading.Thread(target=worker.work, args=())
+        t = threading.Thread(target=worker.work, args=(SharedQueue,))
         t.start()                   # training
         threads.append(t)
     # add a PPO updating thread
-    threads.append(threading.Thread(target=GLOBAL_PPO.update,))
+    threads.append(threading.Thread(target=GLOBAL_PPO.update,
+        args=(SharedQueue, Events['collect'], Events['update'],)))
     threads[-1].start()
     COORD.join(threads)
 
