@@ -21,6 +21,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import gym, gym_OptClang
 import random, threading, queue, operator, os, sys, re
+from operator import itemgetter
 
 EP_MAX = 1000
 N_WORKER = 1                # parallel workers
@@ -96,7 +97,7 @@ class PPO(object):
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
         return norm_dist, params
 
-    def choose_action(self, s):
+    def choose_action(self, s, PassHistory):
         """
         return a int from 0 to 33
         In the world of reinforcement learning, the action space is from 0 to 33.
@@ -106,9 +107,27 @@ class PPO(object):
         """
         s = s[np.newaxis, :]
         a = self.sess.run(self.sample_op, {self.tfs: s})[0]
-        #FIXME: how to choose the action?
-        #TODO:choose the one that was not applied yet
-        return a.argmax()
+        '''
+        choose the one that was not applied yet
+        '''
+        # split the probabilities into list of [index ,probablities]
+        aList = a.tolist()
+        probList = []
+        idx = 0
+        for prob in aList:
+            probList.append([idx, prob])
+            idx += 1
+        # sort with probs in descending order
+        probList.sort(key=itemgetter(1), reverse=True)
+        # find the one that is not applied yet
+        for actionProb in probList:
+            PassIdx = actionProb[0]
+            PassProb = actionProb[1]
+            if PassIdx not in PassHistory:
+                PassHistory[PassIdx] = 'Used'
+                return PassIdx
+        # the code should never come to here
+        return 'Error'
 
     def get_v(self, s):
         if s.ndim < 2: s = s[np.newaxis, :]
@@ -444,10 +463,14 @@ class Worker(object):
             buffer_s, buffer_a, buffer_r = {}, {}, {}
             MeanSigmaDict = self.getCpuMeanSigmaInfo()
             FirstEpi = True
+            PassHistory = {}
             while True:
-                if not CollectEvent.is_set():                  # while global PPO is updating
-                    CollectEvent.wait()                        # wait until PPO is updated
-                    buffer_s, buffer_a, buffer_r = {}, {}, {}   # clear history buffer, use new policy to collect data
+                # while global PPO is updating
+                if not CollectEvent.is_set():
+                    # wait until PPO is updated
+                    CollectEvent.wait()
+                    # clear history buffer, use new policy to collect data
+                    buffer_s, buffer_a, buffer_r = {}, {}, {}
                 '''
                 Save the last profiled info to calculate real rewards
                 '''
@@ -464,7 +487,7 @@ class Worker(object):
                 Choose the features from the most inflential function
                 '''
                 state = self.getMostInfluentialState(states, ResetInfo)
-                action = self.ppo.choose_action(state)
+                action = self.ppo.choose_action(state, PassHistory)
                 nextStates, reward, done, info = self.env.step(action)
                 '''
                 If build failed, skip it.
@@ -522,10 +545,13 @@ class Worker(object):
                         COORD.request_stop()
                         break
                 if done:
+                    # clear history of applied passes
+                    PassHistory = {}
                     break
                 else:
                     states = nextStates
 
+            # FIXME: the code seems never come to here
             # record reward changes, plot later
             PlotEpiLock.acquire()
             if len(GLOBAL_RUNNING_R) == 0:
