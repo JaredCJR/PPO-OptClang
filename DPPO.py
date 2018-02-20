@@ -23,8 +23,8 @@ import gym, gym_OptClang
 import random, threading, queue, operator, os, sys, re
 from operator import itemgetter
 
-EP_MAX = 1000
-N_WORKER = 1                # parallel workers
+EP_MAX = 100
+N_WORKER = 5                # parallel workers
 GAMMA = 0.9                 # reward discount factor
 A_LR = 0.0001               # learning rate for actor
 C_LR = 0.0002               # learning rate for critic
@@ -68,8 +68,11 @@ class PPO(object):
         self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss)
         self.sess.run(tf.global_variables_initializer())
 
-    def update(self, SharedQueue, CollectEvent, UpdateEvent):
-        global GLOBAL_UPDATE_COUNTER
+    def update(self, SharedQueue, SharedEvents, GlobalCounters):
+        GLOBAL_UPDATE_COUNTER = GlobalCounters['update_counter']
+        GLOBAL_EP = GlobalCounters['ep']
+        CollectEvent = SharedEvents['collect']
+        UpdateEvent = SharedEvents['update']
         while not COORD.should_stop():
             if GLOBAL_EP < EP_MAX:
                 # wait until get batch of data
@@ -135,9 +138,9 @@ class PPO(object):
 
 
 class Worker(object):
-    def __init__(self, WorkerID, Locks, GAME, Events):
+    def __init__(self, WorkerID, Locks, Game, Events):
         self.wid = WorkerID
-        self.env = gym.make(GAME).unwrapped
+        self.env = gym.make(Game).unwrapped
         self.ppo = PPO(self.env)
         self.SharedLocks = Locks
         self.SharedEvents = Events
@@ -357,10 +360,11 @@ class Worker(object):
         for name, featureList in states.items():
             # For some reason, the name may be '' (remove it!)
             if not name:
-                buffer_s.pop('', None)
-                buffer_a.pop('', None)
-                buffer_r.pop('', None)
-                continue
+                target = ''
+                states.pop(target, None)
+                if rewards.get(target) is not None:
+                    rewards.pop(target, None)
+        for name, featureList in states.items():
             if buffer_s.get(name) is None:
                 buffer_s[name] = []
                 buffer_a[name] = []
@@ -400,14 +404,15 @@ class Worker(object):
 
     def calcEpisodeReward(self, rewards):
         """
-        return the average reward.
+        return the overall reward.
         """
         total = 0.0
         count = 0.0
         for name, reward in rewards.items():
             total += reward
             count += 1.0
-        return total / count
+        #return total / count
+        return total
 
 
     def getCpuMeanSigmaInfo(self):
@@ -450,14 +455,16 @@ class Worker(object):
             list_r.extend(buffer_r[name])
         return np.vstack(list_s), np.vstack(list_a), np.vstack(list_r)
 
-    def work(self, SharedQueue):
-        global GLOBAL_EP, GLOBAL_RUNNING_R, GLOBAL_UPDATE_COUNTER
+    def work(self, SharedQueue, GlobalCounters):
+        GLOBAL_EP = GlobalCounters['ep']
+        GLOBAL_RUNNING_R = GlobalCounters['running_reward']
+        GLOBAL_UPDATE_COUNTER = GlobalCounters['update_counter']
+        QueueLock = self.SharedLocks['queue']
+        CounterLock = self.SharedLocks['counter']
+        PlotEpiLock = self.SharedLocks['plot_epi']
+        CollectEvent = self.SharedEvents['collect']
+        UpdateEvent = self.SharedEvents['update']
         while not COORD.should_stop():
-            QueueLock = self.SharedLocks['queue']
-            CounterLock = self.SharedLocks['counter']
-            PlotEpiLock = self.SharedLocks['plot_epi']
-            CollectEvent = self.SharedEvents['collect']
-            UpdateEvent = self.SharedEvents['update']
             states, ResetInfo = self.env.reset()
             EpisodeReward = 0
             buffer_s, buffer_a, buffer_r = {}, {}, {}
@@ -517,8 +524,8 @@ class Worker(object):
                 GLOBAL_UPDATE_COUNTER += len(nextStates.keys())
                 CounterLock.release()
                 #FIXME
-                if True:
-                #if GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE or done:
+                #if True:
+                if GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE or done:
                     '''
                     Calculate discounted rewards for all functions
                     '''
@@ -544,23 +551,22 @@ class Worker(object):
                     if GLOBAL_EP >= EP_MAX:         # stop training
                         COORD.request_stop()
                         break
-                if done:
+                if not done:
+                    states = nextStates
+                    continue
+                else:
                     # clear history of applied passes
                     PassHistory = {}
+                    # record reward changes, plot later
+                    PlotEpiLock.acquire()
+                    if len(GLOBAL_RUNNING_R) == 0:
+                        GLOBAL_RUNNING_R.append(EpisodeReward)
+                    else:
+                        GLOBAL_RUNNING_R.append(GLOBAL_RUNNING_R[-1]*0.9+EpisodeReward*0.1)
+                    GLOBAL_EP += 1
+                    PlotEpiLock.release()
+                    print('{0:.1f}%'.format(GLOBAL_EP/EP_MAX*100), '|W%i' % self.wid,  '|EpisodeReward: %.4f' % EpisodeReward,)
                     break
-                else:
-                    states = nextStates
-
-            # FIXME: the code seems never come to here
-            # record reward changes, plot later
-            PlotEpiLock.acquire()
-            if len(GLOBAL_RUNNING_R) == 0:
-                GLOBAL_RUNNING_R.append(EpisodeReward)
-            else:
-                GLOBAL_RUNNING_R.append(GLOBAL_RUNNING_R[-1]*0.9+EpisodeReward*0.1)
-            GLOBAL_EP += 1
-            PlotEpiLock.release()
-            print('{0:.1f}%'.format(GLOBAL_EP/EP_MAX*100), '|W%i' % self.wid,  '|EpisodeReward: %.2f' % EpisodeReward,)
 
 
 if __name__ == '__main__':
@@ -570,35 +576,42 @@ if __name__ == '__main__':
     if os.path.exists(WorkerListLoc):
         os.remove(WorkerListLoc)
 
-    Events = {}
-    Events['update'] = threading.Event()
-    Events['update'].clear()            # not update now
-    Events['collect'] = threading.Event()
-    Events['collect'].set()             # start to collect
+    '''
+    All the methods in Python threading.events are atomic operation.
+    https://docs.python.org/3/library/threading.html
+    '''
+    SharedEvents = {}
+    SharedEvents['update'] = threading.Event()
+    SharedEvents['update'].clear()            # not update now
+    SharedEvents['collect'] = threading.Event()
+    SharedEvents['collect'].set()             # start to collect
     # prevent race condition with 3 locks
     #TODO: release all lock when sigterm
     Locks = {}
     Locks['queue'] = threading.Lock()
     Locks['counter'] = threading.Lock()
     Locks['plot_epi'] = threading.Lock()
+    # counters for syncornization
+    GlobalCounters = {}
+    GlobalCounters['ep'] = 0
+    GlobalCounters['update_counter'] = 0
+    GlobalCounters['running_reward'] = []
     workers = []
     for i in range(N_WORKER):
-        workers.append(Worker(WorkerID=i, Locks=Locks, GAME=Game, Events=Events))
+        workers.append(Worker(WorkerID=i, Locks=Locks, Game=Game, Events=SharedEvents))
 
-    GLOBAL_UPDATE_COUNTER, GLOBAL_EP = 0, 0
     GLOBAL_PPO = PPO(gym.make(Game).unwrapped)
-    GLOBAL_RUNNING_R = []
     COORD = tf.train.Coordinator()
     # workers putting data in this queue
     SharedQueue = queue.Queue()
     threads = []
-    for worker in workers:          # worker threads
-        t = threading.Thread(target=worker.work, args=(SharedQueue,))
-        t.start()                   # training
+    for worker in workers:
+        t = threading.Thread(target=worker.work, args=(SharedQueue, GlobalCounters))
+        t.start()
         threads.append(t)
     # add a PPO updating thread
     threads.append(threading.Thread(target=GLOBAL_PPO.update,
-        args=(SharedQueue, Events['collect'], Events['update'],)))
+        args=(SharedQueue, SharedEvents, GlobalCounters)))
     threads[-1].start()
     COORD.join(threads)
 
