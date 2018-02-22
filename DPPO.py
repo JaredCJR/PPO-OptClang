@@ -31,7 +31,6 @@ GAMMA = 0.9                 # reward discount factor
 A_LR = 0.0001               # learning rate for actor
 C_LR = 0.0002               # learning rate for critic
 MIN_BATCH_SIZE = 24         # minimum batch size for updating PPO
-UPDATE_STEP = 10            # loop update operation n-steps
 EPSILON = 0.2               # for clipping surrogate objective
 
 """
@@ -47,7 +46,6 @@ SharedEvents['update'].clear()            # not update now
 SharedEvents['collect'] = threading.Event()
 SharedEvents['collect'].set()             # start to collect
 # prevent race condition with 3 locks
-#TODO: release all lock when sigterm
 Locks = {}
 Locks['queue'] = threading.Lock()
 Locks['counter'] = threading.Lock()
@@ -75,7 +73,6 @@ class PPO(object):
         self.A_DIM = env.action_space.n
         self.sess = tf.Session()
         self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
-        # Add ops to save and restore all the variables.
         self.ckptLoc = ckptLoc
 
         # critic
@@ -85,7 +82,8 @@ class PPO(object):
             self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
             self.advantage = self.tfdc_r - self.v
             self.closs = tf.reduce_mean(tf.square(self.advantage))
-            self.ctrain_op = tf.train.AdamOptimizer(C_LR).minimize(self.closs)
+            with tf.variable_scope('CriticTrain'):
+                self.ctrain_op = tf.train.AdamOptimizer(C_LR).minimize(self.closs)
 
         # actor
         pi, pi_params = self._build_anet('Actor', trainable=True)
@@ -108,10 +106,18 @@ class PPO(object):
                 surr,
                 tf.clip_by_value(ratio, 1. - EPSILON, 1. + EPSILON) * self.tfadv))
 
-        with tf.variable_scope('Train'):
+        with tf.variable_scope('ActorTrain'):
             self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss)
         self.writer = tf.summary.FileWriter('./logs', self.sess.graph)
         self.sess.run(tf.global_variables_initializer())
+        self.saver = tf.train.Saver()
+        '''
+        If the ckpt exist, restore it.
+        '''
+        if tf.train.checkpoint_exists(self.ckptLoc):
+            self.saver.restore(self.sess, self.ckptLoc)
+            print(Fore.LIGHTGREEN_EX + 'Restore the previous model.')
+            print(Style.RESET_ALL)
 
     def update(self):
         global GlobalStorage
@@ -127,13 +133,14 @@ class PPO(object):
                 s, a, r = data[:, :self.S_DIM], data[:, self.S_DIM: self.S_DIM + self.A_DIM], data[:, -1:]
                 adv = self.sess.run(self.advantage, {self.tfs: s, self.tfdc_r: r})
                 # update actor and critic in a update loop
-                [self.sess.run(self.atrain_op, {self.tfs: s, self.tfa: a, self.tfadv: adv}) for _ in range(UPDATE_STEP)]
-                [self.sess.run(self.ctrain_op, {self.tfs: s, self.tfdc_r: r}) for _ in range(UPDATE_STEP)]
+                for _ in range(len(data)):
+                    self.sess.run(self.atrain_op, {self.tfs: s, self.tfa: a, self.tfadv: adv})
+                for _ in range(len(data)):
+                    self.sess.run(self.ctrain_op, {self.tfs: s, self.tfdc_r: r})
                 '''
                 Save the model
                 '''
-                #FIXME
-                #tf.train.Saver().save(self.sess, self.ckptLoc)
+                self.saver.save(self.sess, self.ckptLoc)
 
                 # updating finished
                 GlobalStorage['Events']['update'].clear()
