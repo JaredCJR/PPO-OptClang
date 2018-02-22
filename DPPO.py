@@ -76,30 +76,38 @@ class PPO(object):
         self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
 
         # critic
-        l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu)
-        self.v = tf.layers.dense(l1, 1)
-        self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
-        self.advantage = self.tfdc_r - self.v
-        self.closs = tf.reduce_mean(tf.square(self.advantage))
-        self.ctrain_op = tf.train.AdamOptimizer(C_LR).minimize(self.closs)
+        with tf.variable_scope('Critic'):
+            l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu)
+            self.v = tf.layers.dense(l1, 1)
+            self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
+            self.advantage = self.tfdc_r - self.v
+            self.closs = tf.reduce_mean(tf.square(self.advantage))
+            self.ctrain_op = tf.train.AdamOptimizer(C_LR).minimize(self.closs)
 
         # actor
-        pi, pi_params = self._build_anet('pi', trainable=True)
-        oldpi, oldpi_params = self._build_anet('oldpi', trainable=False)
-        self.sample_op = tf.squeeze(pi.sample(1), axis=0)  # operation of choosing action
-        self.update_oldpi_op = [oldp.assign(p) for p, oldp in zip(pi_params, oldpi_params)]
+        pi, pi_params = self._build_anet('Actor', trainable=True)
+        oldpi, oldpi_params = self._build_anet('oldActor', trainable=False)
+        # operation of choosing action
+        with tf.variable_scope('ActionsProbs'):
+            self.sample_op = tf.squeeze(pi.sample(1), axis=0)
+        with tf.variable_scope('Update'):
+            self.update_oldpi_op = [oldp.assign(p) for p, oldp in zip(pi_params, oldpi_params)]
 
         self.tfa = tf.placeholder(tf.float32, [None, self.A_DIM], 'action')
         self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
-        # ratio = tf.exp(pi.log_prob(self.tfa) - oldpi.log_prob(self.tfa))
-        ratio = pi.prob(self.tfa) / (oldpi.prob(self.tfa) + 1e-5)
-        surr = ratio * self.tfadv                       # surrogate loss
+        with tf.variable_scope('ppoLoss'):
+            # ratio = tf.exp(pi.log_prob(self.tfa) - oldpi.log_prob(self.tfa))
+            ratio = pi.prob(self.tfa) / (oldpi.prob(self.tfa) + 1e-5)
+            # surrogate loss
+            surr = ratio * self.tfadv
+            # clipped surrogate objective
+            self.aloss = -tf.reduce_mean(tf.minimum(
+                surr,
+                tf.clip_by_value(ratio, 1. - EPSILON, 1. + EPSILON) * self.tfadv))
 
-        self.aloss = -tf.reduce_mean(tf.minimum(        # clipped surrogate objective
-            surr,
-            tf.clip_by_value(ratio, 1. - EPSILON, 1. + EPSILON) * self.tfadv))
-
-        self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss)
+        with tf.variable_scope('Train'):
+            self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss)
+        self.writer = tf.summary.FileWriter('./logs', self.sess.graph)
         self.sess.run(tf.global_variables_initializer())
 
     def update(self):
@@ -118,11 +126,14 @@ class PPO(object):
                 # update actor and critic in a update loop
                 [self.sess.run(self.atrain_op, {self.tfs: s, self.tfa: a, self.tfadv: adv}) for _ in range(UPDATE_STEP)]
                 [self.sess.run(self.ctrain_op, {self.tfs: s, self.tfdc_r: r}) for _ in range(UPDATE_STEP)]
-                GlobalStorage['Events']['update'].clear()        # updating finished
+                # updating finished
+                GlobalStorage['Events']['update'].clear()
                 GlobalStorage['Locks']['counter'].acquire()
-                GlobalStorage['Counters']['update_counter'] = 0   # reset counter
+                # reset counter
+                GlobalStorage['Counters']['update_counter'] = 0
                 GlobalStorage['Locks']['counter'].release()
-                GlobalStorage['Events']['collect'].set()         # set collecting available
+                # set collecting available
+                GlobalStorage['Events']['collect'].set()
         print(Fore.YELLOW + 'Updator stopped')
         print(Style.RESET_ALL)
 
