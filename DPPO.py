@@ -23,6 +23,7 @@ import gym, gym_OptClang
 import random, threading, queue, operator, os, sys, re
 from operator import itemgetter
 from colorama import Fore, Style
+from datetime import datetime
 
 EP_MAX = 3
 N_WORKER = 5                # parallel workers
@@ -68,12 +69,14 @@ GlobalStorage['DataQueue'] = queue.Queue()
 
 
 class PPO(object):
-    def __init__(self, env):
+    def __init__(self, env, ckptLoc):
         tf.reset_default_graph()
         self.S_DIM = len(env.observation_space.low)
         self.A_DIM = env.action_space.n
         self.sess = tf.Session()
         self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
+        # Add ops to save and restore all the variables.
+        self.ckptLoc = ckptLoc
 
         # critic
         with tf.variable_scope('Critic'):
@@ -126,6 +129,12 @@ class PPO(object):
                 # update actor and critic in a update loop
                 [self.sess.run(self.atrain_op, {self.tfs: s, self.tfa: a, self.tfadv: adv}) for _ in range(UPDATE_STEP)]
                 [self.sess.run(self.ctrain_op, {self.tfs: s, self.tfdc_r: r}) for _ in range(UPDATE_STEP)]
+                '''
+                Save the model
+                '''
+                #FIXME
+                #tf.train.Saver().save(self.sess, self.ckptLoc)
+
                 # updating finished
                 GlobalStorage['Events']['update'].clear()
                 GlobalStorage['Locks']['counter'].acquire()
@@ -184,11 +193,11 @@ class PPO(object):
 
 
 class Worker(object):
-    def __init__(self, WorkerID, Game):
-        global GlobalStorage
+    def __init__(self, WorkerID):
+        global GlobalPPO
         self.wid = WorkerID
         self.env = gym.make(Game).unwrapped
-        self.ppo = PPO(self.env)
+        self.ppo = GlobalPPO
 
     def getMostInfluentialState(self, states, ResetInfo):
         """
@@ -619,6 +628,9 @@ class Worker(object):
 
 if __name__ == '__main__':
     Game='OptClang-v0'
+    # path for save and restore the model
+    ckptLoc = './logs/model.ckpt'
+    GlobalPPO = PPO(gym.make(Game).unwrapped, ckptLoc)
     # remove worker file list.
     WorkerListLoc = "/tmp/gym-OptClang-WorkerList"
     if os.path.exists(WorkerListLoc):
@@ -626,16 +638,15 @@ if __name__ == '__main__':
 
     workers = []
     for i in range(N_WORKER):
-        workers.append(Worker(WorkerID=(i+1), Game=Game))
+        workers.append(Worker(WorkerID=(i+1)))
 
-    GLOBAL_PPO = PPO(gym.make(Game).unwrapped)
     threads = []
     for worker in workers:
         t = threading.Thread(target=worker.work, args=())
         t.start()
         threads.append(t)
     # add a PPO updating thread
-    threads.append(threading.Thread(target=GLOBAL_PPO.update,
+    threads.append(threading.Thread(target=GlobalPPO.update,
         args=()))
     threads[-1].start()
     try:
