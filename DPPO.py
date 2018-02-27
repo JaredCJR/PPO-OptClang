@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-The algorithm is based on MorvanZhou's implementation: https://morvanzhou.github.io/tutorials
-And he also refers to the work of OpenAI and DeepMind.
+Refer to the work of OpenAI and DeepMind.
 
 Algorithm:
 A simple version of OpenAI's Proximal Policy Optimization (PPO). [https://arxiv.org/abs/1707.06347]
@@ -14,6 +13,9 @@ Dependencies:
 tensorflow r1.5
 gym 0.9.2
 gym_OptClang
+
+Thanks to MorvanZhou's implementation: https://morvanzhou.github.io/tutorials
+I learned a lot from him =)
 """
 
 import tensorflow as tf
@@ -22,22 +24,25 @@ import matplotlib.pyplot as plt
 import gym, gym_OptClang
 import random, threading, queue, operator, os, sys, re
 from operator import itemgetter
+from random import shuffle
 from colorama import Fore, Style
 from datetime import datetime
+from sklearn.preprocessing import StandardScaler
+import time
 
-EP_MAX = 3
+EP_MAX = 300
 N_WORKER = 5                # parallel workers
-GAMMA = 0.9                 # reward discount factor
+GAMMA = 0.95                # reward discount factor
 A_LR = 0.0001               # learning rate for actor
 C_LR = 0.0002               # learning rate for critic
-MIN_BATCH_SIZE = 24         # minimum batch size for updating PPO
+MIN_BATCH_SIZE = 64         # minimum batch size for updating PPO
 EPSILON = 0.2               # for clipping surrogate objective
 
 """
 Shared vars
 """
 '''
-All the methods in Python threading.events are atomic operation.
+All the methods in Python threading.events are atomic operations.
 https://docs.python.org/3/library/threading.html
 '''
 SharedEvents = {}
@@ -77,11 +82,14 @@ class PPO(object):
 
         # critic
         with tf.variable_scope('Critic'):
-            l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu)
-            self.v = tf.layers.dense(l1, 1)
-            self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
-            self.advantage = self.tfdc_r - self.v
-            self.closs = tf.reduce_mean(tf.square(self.advantage))
+            with tf.variable_scope('Fully_Connected'):
+                l1 = self.add_layer(self.tfs, 100, activation_function=tf.nn.leaky_relu, norm=True)
+            with tf.variable_scope('Value'):
+                self.v = tf.layers.dense(l1, 1)
+            with tf.variable_scope('Loss'):
+                self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
+                self.advantage = self.tfdc_r - self.v
+                self.closs = tf.reduce_mean(tf.square(self.advantage))
             with tf.variable_scope('CriticTrain'):
                 self.ctrain_op = tf.train.AdamOptimizer(C_LR).minimize(self.closs)
 
@@ -90,7 +98,8 @@ class PPO(object):
         oldpi, oldpi_params = self._build_anet('oldActor', trainable=False)
         # operation of choosing action
         with tf.variable_scope('ActionsProbs'):
-            self.sample_op = tf.squeeze(pi.sample(1), axis=0)
+            #self.sample_op = tf.squeeze(pi.sample(1), axis=0)
+            self.sample_op = tf.squeeze(pi, axis=0)
         with tf.variable_scope('Update'):
             self.update_oldpi_op = [oldp.assign(p) for p, oldp in zip(pi_params, oldpi_params)]
 
@@ -98,7 +107,9 @@ class PPO(object):
         self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
         with tf.variable_scope('ppoLoss'):
             # ratio = tf.exp(pi.log_prob(self.tfa) - oldpi.log_prob(self.tfa))
-            ratio = pi.prob(self.tfa) / (oldpi.prob(self.tfa) + 1e-5)
+            #ratio = pi.prob(self.tfa) / (oldpi.prob(self.tfa) + 1e-5)
+            # add a small number to avoid NaN
+            ratio = pi / (oldpi + 1e-6)
             # surrogate loss
             surr = ratio * self.tfadv
             # clipped surrogate objective
@@ -153,14 +164,69 @@ class PPO(object):
         print(Fore.YELLOW + 'Updator stopped')
         print(Style.RESET_ALL)
 
+    def add_layer(self, inputs, out_size, trainable=True,activation_function=None, norm=False):
+        in_size = inputs.get_shape().as_list()[1]
+        Weights = tf.Variable(tf.random_normal([in_size, out_size], mean=0., stddev=1.), trainable=trainable)
+        biases = tf.Variable(tf.zeros([1, out_size]) + 0.01, trainable=trainable)
+
+        # fully connected product
+        Wx_plus_b = tf.matmul(inputs, Weights) + biases
+
+        # normalize fully connected product
+        if norm:
+            with tf.variable_scope('BatchNormalization'):
+                # Batch Normalize
+                fc_mean, fc_var = tf.nn.moments(
+                    Wx_plus_b,
+                    axes=[0],   # the dimension you wanna normalize, here [0] for batch
+                                # for image, you wanna do [0, 1, 2] for [batch, height, width] but not channel
+                )
+                scale = tf.Variable(tf.ones([out_size]))
+                shift = tf.Variable(tf.zeros([out_size]))
+                epsilon = 0.001
+
+                # apply moving average for mean and var when train on batch
+                ema = tf.train.ExponentialMovingAverage(decay=0.5)
+                def mean_var_with_update():
+                    ema_apply_op = ema.apply([fc_mean, fc_var])
+                    with tf.control_dependencies([ema_apply_op]):
+                        return tf.identity(fc_mean), tf.identity(fc_var)
+                mean, var = mean_var_with_update()
+
+                Wx_plus_b = tf.nn.batch_normalization(Wx_plus_b, mean, var, shift, scale, epsilon)
+                # similar with this two steps:
+                # Wx_plus_b = (Wx_plus_b - fc_mean) / tf.sqrt(fc_var + 0.001)
+                # Wx_plus_b = Wx_plus_b * scale + shift
+
+        # activation
+        if activation_function is None:
+            outputs = Wx_plus_b
+        else:
+            with tf.variable_scope('ActivationFunction'):
+                outputs = activation_function(Wx_plus_b)
+
+        return outputs
+
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
-            l1 = tf.layers.dense(self.tfs, 200, tf.nn.relu, trainable=trainable)
-            mu = 2 * tf.layers.dense(l1, self.A_DIM, tf.nn.tanh, trainable=trainable)
-            sigma = tf.layers.dense(l1, self.A_DIM, tf.nn.softplus, trainable=trainable)
-            norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
+            with tf.variable_scope('Fully_Connected'):
+                #l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu, trainable=trainable)
+                l1 = self.add_layer(self.tfs, 100, trainable,activation_function=tf.nn.leaky_relu, norm=True)
+            '''
+            with tf.variable_scope('mu'):
+                #mu = 2 * tf.layers.dense(l1, self.A_DIM, tf.nn.tanh, trainable=trainable)
+                mu = 2 * self.add_layer(l1, self.A_DIM, trainable,activation_function=tf.nn.tanh, norm=True)
+            with tf.variable_scope('sigma'):
+                #sigma = tf.layers.dense(l1, self.A_DIM, tf.nn.softplus, trainable=trainable)
+                sigma = self.add_layer(l1, self.A_DIM, trainable,activation_function=tf.nn.softplus, norm=True)
+            with tf.variable_scope('Normal_Distribution'):
+                norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
+            '''
+            with tf.variable_scope('Action_Probs'):
+                acts_prob = self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
-        return norm_dist, params
+        #return norm_dist, params
+        return acts_prob, params
 
     def choose_action(self, s, PassHistory):
         """
@@ -171,7 +237,9 @@ class PPO(object):
         We don't have to bother this by ourselves.
         """
         s = s[np.newaxis, :]
-        a = self.sess.run(self.sample_op, {self.tfs: s})[0]
+        #a = self.sess.run(self.sample_op, {self.tfs: s})[0]
+        a = self.sess.run(self.sample_op, {self.tfs: s})
+        print(a)
         '''
         choose the one that was not applied yet
         '''
@@ -182,6 +250,9 @@ class PPO(object):
         for prob in aList:
             probList.append([idx, prob])
             idx += 1
+        # some probs may be the same.
+        # Try to avoid that every time choose the same action
+        shuffle(probList)
         # sort with probs in descending order
         probList.sort(key=itemgetter(1), reverse=True)
         # find the one that is not applied yet
@@ -389,7 +460,7 @@ class Worker(object):
                 How important: based on how many functions are profiled.
                 '''
                 UseOverallPerf = False
-                Alpha = Alpha*(Beta*(1 / UsageProfiledRatio))
+                Alpha = Alpha*(Beta*(1 / UsageProfiledRatio)) * 2 # more important
             if UseOverallPerf:
                 if isSlowDown == True and delta_total_cycles > 0:
                     Alpha /= Beta
@@ -414,7 +485,7 @@ class Worker(object):
         #FIXME: do we need to discard some results that the rewards are not that important?
         """
         No return value, they are append inplace in buffer_x
-        buffer_s : dict of list of np.array as features
+        buffer_s : dict of np.array as features
         buffer_a : dict of list of actions(int)
         buffer_r : dict of list of rewards(float)
         """
@@ -431,7 +502,7 @@ class Worker(object):
                 buffer_s[name] = []
                 buffer_a[name] = []
                 buffer_r[name] = []
-            buffer_s[name].append(np.asarray(featureList, dtype=np.uint32))
+            buffer_s[name].append(np.asarray(featureList, dtype=np.float32))
             actionFeature = [0]*34
             actionFeature[action] = 1
             buffer_a[name].append(actionFeature)
@@ -450,7 +521,7 @@ class Worker(object):
             '''
             Get estimated rewards from critic
             '''
-            nextOb = np.asarray(FeatureList, dtype=np.uint32)
+            nextOb = np.asarray(FeatureList, dtype=np.float32)
             StateValue = self.ppo.get_v(nextOb)
             discounted_r = []
             for r in buffer_r[name][::-1]:
@@ -506,7 +577,7 @@ class Worker(object):
 
     def DictToVstack(self, buffer_s, buffer_a, buffer_r):
         """
-        return vstack of state, action and rewards.
+        return vstack of state(normalized), action and rewards.
         """
         list_s = []
         list_a = []
