@@ -10,8 +10,8 @@ The global PPO updating rule is adopted from DeepMind's paper (DPPO):
 Emergence of Locomotion Behaviours in Rich Environments (Google Deepmind): [https://arxiv.org/abs/1707.02286]
 
 Dependencies:
-tensorflow r1.5
-gym 0.9.2
+tensorflow
+gym
 gym_OptClang
 
 Thanks to MorvanZhou's implementation: https://morvanzhou.github.io/tutorials
@@ -37,6 +37,7 @@ A_LR = 0.0001               # learning rate for actor
 C_LR = 0.0002               # learning rate for critic
 MIN_BATCH_SIZE = 64         # minimum batch size for updating PPO
 EPSILON = 0.2               # for clipping surrogate objective
+UPDATE_STEPS = 10           # learn multiple times. Because of the PPO will constrain the update speed.
 
 """
 Shared vars
@@ -72,13 +73,15 @@ GlobalStorage['DataQueue'] = queue.Queue()
 
 
 class PPO(object):
-    def __init__(self, env, ckptLoc):
+    def __init__(self, env, ckptLocBase, ckptName):
         tf.reset_default_graph()
         self.S_DIM = len(env.observation_space.low)
         self.A_DIM = env.action_space.n
         self.sess = tf.Session()
         self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
-        self.ckptLoc = ckptLoc
+        self.ckptLocBase = ckptLocBase
+        self.ckptLoc = ckptLocBase + '/' + ckptName
+        self.RecordStep = 0
 
         # critic
         with tf.variable_scope('Critic'):
@@ -90,6 +93,7 @@ class PPO(object):
                 self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
                 self.advantage = self.tfdc_r - self.v
                 self.closs = tf.reduce_mean(tf.square(self.advantage))
+                self.CriticLossSummary = tf.summary.scalar('critic_loss', self.closs)
             with tf.variable_scope('CriticTrain'):
                 self.ctrain_op = tf.train.AdamOptimizer(C_LR).minimize(self.closs)
 
@@ -98,16 +102,13 @@ class PPO(object):
         oldpi, oldpi_params = self._build_anet('oldActor', trainable=False)
         # operation of choosing action
         with tf.variable_scope('ActionsProbs'):
-            #self.sample_op = tf.squeeze(pi.sample(1), axis=0)
-            self.sample_op = tf.squeeze(pi, axis=0)
+            self.acts_prob = tf.squeeze(pi, axis=0)
         with tf.variable_scope('Update'):
             self.update_oldpi_op = [oldp.assign(p) for p, oldp in zip(pi_params, oldpi_params)]
 
         self.tfa = tf.placeholder(tf.float32, [None, self.A_DIM], 'action')
         self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
         with tf.variable_scope('ppoLoss'):
-            # ratio = tf.exp(pi.log_prob(self.tfa) - oldpi.log_prob(self.tfa))
-            #ratio = pi.prob(self.tfa) / (oldpi.prob(self.tfa) + 1e-5)
             # add a small number to avoid NaN
             ratio = pi / (oldpi + 1e-6)
             # surrogate loss
@@ -116,10 +117,12 @@ class PPO(object):
             self.aloss = -tf.reduce_mean(tf.minimum(
                 surr,
                 tf.clip_by_value(ratio, 1. - EPSILON, 1. + EPSILON) * self.tfadv))
+            self.ActorLossSummary = tf.summary.scalar('actor_loss', self.aloss)
 
         with tf.variable_scope('ActorTrain'):
             self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss)
-        self.writer = tf.summary.FileWriter('./logs', self.sess.graph)
+
+        self.writer = tf.summary.FileWriter(self.ckptLocBase, self.sess.graph)
         self.sess.run(tf.global_variables_initializer())
         self.saver = tf.train.Saver()
         '''
@@ -144,10 +147,32 @@ class PPO(object):
                 s, a, r = data[:, :self.S_DIM], data[:, self.S_DIM: self.S_DIM + self.A_DIM], data[:, -1:]
                 adv = self.sess.run(self.advantage, {self.tfs: s, self.tfdc_r: r})
                 # update actor and critic in a update loop
-                for _ in range(len(data)):
+                once = True
+                for _ in range(UPDATE_STEPS):
                     self.sess.run(self.atrain_op, {self.tfs: s, self.tfa: a, self.tfadv: adv})
-                for _ in range(len(data)):
+                    '''
+                    write summary
+                    '''
+                    if once:
+                        once = False
+                        result = self.sess.run(
+                                    tf.summary.merge([self.ActorLossSummary]),
+                                    feed_dict={self.tfs: s, self.tfa: a, self.tfadv: adv})
+                        self.writer.add_summary(result, self.RecordStep)
+                once = True
+                for _ in range(UPDATE_STEPS):
                     self.sess.run(self.ctrain_op, {self.tfs: s, self.tfdc_r: r})
+                    '''
+                    write summary
+                    '''
+                    if once:
+                        once = False
+                        result = self.sess.run(
+                                    tf.summary.merge([self.CriticLossSummary]),
+                                    feed_dict={self.tfs: s, self.tfdc_r: r})
+                        self.writer.add_summary(result, self.RecordStep)
+                        self.writer.flush()
+                        self.RecordStep += 1
                 '''
                 Save the model
                 '''
@@ -167,7 +192,7 @@ class PPO(object):
     def add_layer(self, inputs, out_size, trainable=True,activation_function=None, norm=False):
         in_size = inputs.get_shape().as_list()[1]
         Weights = tf.Variable(tf.random_normal([in_size, out_size], mean=0., stddev=1.), trainable=trainable)
-        biases = tf.Variable(tf.zeros([1, out_size]) + 0.01, trainable=trainable)
+        biases = tf.Variable(tf.zeros([1, out_size]) + 0.1, trainable=trainable)
 
         # fully connected product
         Wx_plus_b = tf.matmul(inputs, Weights) + biases
@@ -210,23 +235,11 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             with tf.variable_scope('Fully_Connected'):
-                #l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu, trainable=trainable)
                 l1 = self.add_layer(self.tfs, 100, trainable,activation_function=tf.nn.leaky_relu, norm=True)
-            '''
-            with tf.variable_scope('mu'):
-                #mu = 2 * tf.layers.dense(l1, self.A_DIM, tf.nn.tanh, trainable=trainable)
-                mu = 2 * self.add_layer(l1, self.A_DIM, trainable,activation_function=tf.nn.tanh, norm=True)
-            with tf.variable_scope('sigma'):
-                #sigma = tf.layers.dense(l1, self.A_DIM, tf.nn.softplus, trainable=trainable)
-                sigma = self.add_layer(l1, self.A_DIM, trainable,activation_function=tf.nn.softplus, norm=True)
-            with tf.variable_scope('Normal_Distribution'):
-                norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
-            '''
             with tf.variable_scope('Action_Probs'):
-                acts_prob = self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
+                probs = self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
-        #return norm_dist, params
-        return acts_prob, params
+        return probs, params
 
     def choose_action(self, s, PassHistory):
         """
@@ -237,14 +250,13 @@ class PPO(object):
         We don't have to bother this by ourselves.
         """
         s = s[np.newaxis, :]
-        #a = self.sess.run(self.sample_op, {self.tfs: s})[0]
-        a = self.sess.run(self.sample_op, {self.tfs: s})
-        print(a)
+        a_probs = self.sess.run(self.acts_prob, {self.tfs: s})
+        print(a_probs)
         '''
         choose the one that was not applied yet
         '''
         # split the probabilities into list of [index ,probablities]
-        aList = a.tolist()
+        aList = a_probs.tolist()
         probList = []
         idx = 0
         for prob in aList:
@@ -257,8 +269,14 @@ class PPO(object):
         probList.sort(key=itemgetter(1), reverse=True)
         # find the one that is not applied yet
         for actionProb in probList:
-            PassIdx = actionProb[0]
-            PassProb = actionProb[1]
+            '''
+            During training, we need some chance to get unexpected action to let
+            the agent face different conditions as much as possible.
+            '''
+            # TODO: change the strategy for different situations
+            #PassIdx = actionProb[0] # inference without online-learning use this to get the most possible action
+            PassIdx = np.random.choice(np.arange(self.A_DIM), p=a_probs.ravel()) # training use this
+            #print('PassIdx={} with {} prob'.format(PassIdx, actionProb[1]))
             if PassIdx not in PassHistory:
                 PassHistory[PassIdx] = 'Used'
                 return PassIdx
@@ -418,7 +436,7 @@ class Worker(object):
         95% of results are in the twice sigma.
         Therefore, 2x is necessary.
         '''
-        SigmaRatio = abs((abs_delta_total_cycles - sigma_total_cycles)/(2*sigma_total_cycles))
+        SigmaRatio = abs_delta_total_cycles/(2*sigma_total_cycles)
         UsageNumOverAll = 0
         for name, usage in newAllUsageDict.items():
             if usage is not None:
@@ -502,11 +520,17 @@ class Worker(object):
                 buffer_s[name] = []
                 buffer_a[name] = []
                 buffer_r[name] = []
-            buffer_s[name].append(np.asarray(featureList, dtype=np.float32))
-            actionFeature = [0]*34
-            actionFeature[action] = 1
-            buffer_a[name].append(actionFeature)
-            buffer_r[name].append(rewards[name])
+            '''
+            Our function-name matching mechanism may fail sometimes.
+            ex. key='btEmptyAlgorithm::~btEmptyAlgorithm()' will fail
+            This does not matters a lot, so we skip it now ny checking key existence.
+            '''
+            if name in rewards:
+                buffer_s[name].append(np.asarray(featureList, dtype=np.float32))
+                actionFeature = [0]*34
+                actionFeature[action] = 1
+                buffer_a[name].append(actionFeature)
+                buffer_r[name].append(rewards[name])
 
 
 
@@ -698,6 +722,7 @@ class Worker(object):
                     GlobalStorage['Locks']['plot_epi'].release()
                     print(Fore.GREEN + '{0:.1f}%'.format(GlobalStorage['Counters']['ep']/EP_MAX*100), '|W%i' % self.wid, '|EpisodeReward: %.4f' % EpisodeReward,)
                     print(Style.RESET_ALL)
+                    #TODO: record speedup
                     break
 
         print(Fore.YELLOW + 'WorkerID={} stopped'.format(self.wid))
@@ -707,8 +732,7 @@ class Worker(object):
 if __name__ == '__main__':
     Game='OptClang-v0'
     # path for save and restore the model
-    ckptLoc = './logs/model.ckpt'
-    GlobalPPO = PPO(gym.make(Game).unwrapped, ckptLoc)
+    GlobalPPO = PPO(gym.make(Game).unwrapped, './logs', 'model.ckpt')
     # remove worker file list.
     WorkerListLoc = "/tmp/gym-OptClang-WorkerList"
     if os.path.exists(WorkerListLoc):
