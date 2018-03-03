@@ -71,6 +71,17 @@ GlobalStorage['Coordinator'] = tf.train.Coordinator()
 # workers putting data in this queue
 GlobalStorage['DataQueue'] = queue.Queue()
 
+"""
+helper functions
+"""
+def ColorPrint(color, msg):
+    """
+    color should be one of the member of Fore.
+    ex. Fore.RED
+    """
+    print(color + msg)
+    print(Style.RESET_ALL)
+
 
 class PPO(object):
     def __init__(self, env, ckptLocBase, ckptName):
@@ -130,8 +141,7 @@ class PPO(object):
         '''
         if tf.train.checkpoint_exists(self.ckptLoc):
             self.saver.restore(self.sess, self.ckptLoc)
-            print(Fore.LIGHTGREEN_EX + 'Restore the previous model.')
-            print(Style.RESET_ALL)
+            ColorPrint(Fore.LIGHTGREEN_EX, 'Restore the previous model.')
 
     def update(self):
         global GlobalStorage
@@ -186,8 +196,7 @@ class PPO(object):
                 GlobalStorage['Locks']['counter'].release()
                 # set collecting available
                 GlobalStorage['Events']['collect'].set()
-        print(Fore.YELLOW + 'Updator stopped')
-        print(Style.RESET_ALL)
+        ColorPrint(Fore.YELLOW, 'Updator stopped')
 
     def add_layer(self, inputs, out_size, trainable=True,activation_function=None, norm=False):
         in_size = inputs.get_shape().as_list()[1]
@@ -650,6 +659,7 @@ class Worker(object):
                 If build failed, skip it.
                 '''
                 if reward < 0:
+                    ColorPrint(Fore.RED, 'Failed. Use new target and forget these memories')
                     break
 
                 '''
@@ -703,8 +713,7 @@ class Worker(object):
                     if GlobalStorage['Counters']['ep'] >= EP_MAX:
                         # stop training
                         GlobalStorage['Coordinator'].request_stop()
-                        print(Fore.RED + 'WorkerID={} calls to Stop'.format(self.wid))
-                        print(Style.RESET_ALL)
+                        ColorPrint(Fore.RED, 'WorkerID={} calls to Stop'.format(self.wid))
                         break
                 if not done:
                     states = nextStates
@@ -720,13 +729,12 @@ class Worker(object):
                         GlobalStorage['Counters']['running_reward'].append(GlobalStorage['Counters']['running_reward'][-1]*0.9+EpisodeReward*0.1)
                     GlobalStorage['Counters']['ep'] += 1
                     GlobalStorage['Locks']['plot_epi'].release()
-                    print(Fore.GREEN + '{0:.1f}%'.format(GlobalStorage['Counters']['ep']/EP_MAX*100), '|W%i' % self.wid, '|EpisodeReward: %.4f' % EpisodeReward,)
-                    print(Style.RESET_ALL)
+                    msg = '{0:.1f}%'.format(GlobalStorage['Counters']['ep']/EP_MAX*100) + ' | WorkerID={}'.format(self.wid) + ' | EpisodeReward: {0:.4f}'.format(EpisodeReward)
+                    ColorPrint(Fore.GREEN, msg)
                     #TODO: record speedup
                     break
+        ColorPrint(Fore.YELLOW, 'WorkerID={} stopped'.format(self.wid))
 
-        print(Fore.YELLOW + 'WorkerID={} stopped'.format(self.wid))
-        print(Style.RESET_ALL)
 
 
 if __name__ == '__main__':
@@ -755,13 +763,11 @@ if __name__ == '__main__':
         # Wait for all the threads to terminate, give them 1s grace period
         GlobalStorage['Coordinator'].join(threads=threads, stop_grace_period_secs=1)
     except RuntimeError:
-        print(Fore.RED + "Some of the workers cannot be stopped within 1 sec.\nYou can ignore the messages after this msg.")
-        print(Style.RESET_ALL)
+        ColorPrint(Fore.RED, "Some of the workers cannot be stopped within 1 sec.\nYou can ignore the messages after this msg.")
 
     # plot changes of rewards
     plt.plot(np.arange(len(GlobalStorage['Counters']['running_reward'])), GlobalStorage['Counters']['running_reward'])
     plt.xlabel('Episode')
     plt.ylabel('Moving reward')
     plt.savefig('running_rewards.png')
-    print(Fore.RED + 'running_rewards.png is saved.')
-    print(Style.RESET_ALL)
+    ColorPrint(Fore.RED, 'running_rewards.png is saved.')
