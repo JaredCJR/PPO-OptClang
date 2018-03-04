@@ -20,6 +20,9 @@ I learned a lot from him =)
 
 import tensorflow as tf
 import numpy as np
+import matplotlib
+# do not use x-server
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import gym, gym_OptClang
 import random, threading, queue, operator, os, sys, re
@@ -29,6 +32,8 @@ from colorama import Fore, Style
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 import time
+import io
+
 
 EP_MAX = 300
 N_WORKER = 5                # parallel workers
@@ -56,11 +61,12 @@ Locks = {}
 Locks['queue'] = threading.Lock()
 Locks['counter'] = threading.Lock()
 Locks['plot_epi'] = threading.Lock()
-# counters for syncornization
+# counters for synchrnization
 GlobalCounters = {}
 GlobalCounters['ep'] = 0
 GlobalCounters['update_counter'] = 0
 GlobalCounters['running_reward'] = []
+GlobalCounters['overall_speedup'] = []
 # a global dict to access everything
 GlobalStorage = {}
 GlobalStorage['Events'] = SharedEvents
@@ -82,13 +88,23 @@ def ColorPrint(color, msg):
     print(color + msg)
     print(Style.RESET_ALL)
 
+def gen_plot(GraphTitle, InputList):
+    """Create a pyplot plot and save to buffer."""
+    plt.figure()
+    plt.plot(InputList)
+    plt.title(GraphTitle)
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    return buf
+
 
 class PPO(object):
     def __init__(self, env, ckptLocBase, ckptName):
         tf.reset_default_graph()
         self.S_DIM = len(env.observation_space.low)
         self.A_DIM = env.action_space.n
-        self.sess = tf.Session()
+        self.sess = tf.Session(graph=tf.get_default_graph())
         self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
         self.ckptLocBase = ckptLocBase
         self.ckptLoc = ckptLocBase + '/' + ckptName
@@ -133,6 +149,15 @@ class PPO(object):
         with tf.variable_scope('ActorTrain'):
             self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss)
 
+        self.OverallSpeedup = tf.placeholder(tf.float32, name='OverallSpeedup')
+        self.EpisodeReward = tf.placeholder(tf.float32, name='EpisodeReward')
+        self.one = tf.constant(1.0, dtype=tf.float32)
+        with tf.variable_scope('Summary'):
+            self.RecordSpeedup_op = tf.multiply(self.OverallSpeedup, self.one)
+            self.SpeedupSummary = tf.summary.scalar('OverallSpeedup', self.RecordSpeedup_op)
+            self.RecordEpiReward_op = tf.multiply(self.EpisodeReward, self.one)
+            self.EpiRewardSummary = tf.summary.scalar('EpisodeReward', self.RecordEpiReward_op)
+
         self.writer = tf.summary.FileWriter(self.ckptLocBase, self.sess.graph)
         self.sess.run(tf.global_variables_initializer())
         self.saver = tf.train.Saver()
@@ -157,32 +182,25 @@ class PPO(object):
                 s, a, r = data[:, :self.S_DIM], data[:, self.S_DIM: self.S_DIM + self.A_DIM], data[:, -1:]
                 adv = self.sess.run(self.advantage, {self.tfs: s, self.tfdc_r: r})
                 # update actor and critic in a update loop
-                once = True
                 for _ in range(UPDATE_STEPS):
                     self.sess.run(self.atrain_op, {self.tfs: s, self.tfa: a, self.tfadv: adv})
-                    '''
-                    write summary
-                    '''
-                    if once:
-                        once = False
-                        result = self.sess.run(
-                                    tf.summary.merge([self.ActorLossSummary]),
-                                    feed_dict={self.tfs: s, self.tfa: a, self.tfadv: adv})
-                        self.writer.add_summary(result, self.RecordStep)
-                once = True
                 for _ in range(UPDATE_STEPS):
                     self.sess.run(self.ctrain_op, {self.tfs: s, self.tfdc_r: r})
-                    '''
-                    write summary
-                    '''
-                    if once:
-                        once = False
-                        result = self.sess.run(
-                                    tf.summary.merge([self.CriticLossSummary]),
-                                    feed_dict={self.tfs: s, self.tfdc_r: r})
-                        self.writer.add_summary(result, self.RecordStep)
-                        self.writer.flush()
-                        self.RecordStep += 1
+                '''
+                write summary
+                '''
+                # actor loss
+                result = self.sess.run(
+                            tf.summary.merge([self.ActorLossSummary]),
+                            feed_dict={self.tfs: s, self.tfa: a, self.tfadv: adv})
+                self.writer.add_summary(result, self.RecordStep)
+                # critic loss
+                result = self.sess.run(
+                            tf.summary.merge([self.CriticLossSummary]),
+                            feed_dict={self.tfs: s, self.tfdc_r: r})
+                self.writer.add_summary(result, self.RecordStep)
+                #self.writer.flush()
+                self.RecordStep += 1
                 '''
                 Save the model
                 '''
@@ -621,6 +639,26 @@ class Worker(object):
             list_r.extend(buffer_r[name])
         return np.vstack(list_s), np.vstack(list_a), np.vstack(list_r)
 
+    def calcOverallSpeedup(self, ResetInfo, Info):
+        """
+        return the overall speedup(formatted float):
+        >0: speedup
+        <0: slow down
+        ex. 0.032
+        """
+        old = ResetInfo["TotalCyclesStat"]
+        new = Info["TotalCyclesStat"]
+        speedup = (old-new)/old
+        formatted = "%.3f" % speedup
+        return float(formatted)
+
+    def DrawPltToTf(self, speedup, overall_reward, step):
+        result = self.ppo.sess.run(
+                    tf.summary.merge([self.ppo.SpeedupSummary, self.ppo.EpiRewardSummary]),
+                    feed_dict={self.ppo.OverallSpeedup: speedup,
+                               self.ppo.EpisodeReward: overall_reward})
+        self.ppo.writer.add_summary(result, step)
+
     def work(self):
         global GlobalStorage
         while not GlobalStorage['Coordinator'].should_stop():
@@ -728,10 +766,15 @@ class Worker(object):
                     else:
                         GlobalStorage['Counters']['running_reward'].append(GlobalStorage['Counters']['running_reward'][-1]*0.9+EpisodeReward*0.1)
                     GlobalStorage['Counters']['ep'] += 1
+                    speedup = self.calcOverallSpeedup(ResetInfo, info)
+                    GlobalStorage['Counters']['overall_speedup'].append(speedup)
+                    '''
+                    draw to tensorboard
+                    '''
+                    self.DrawPltToTf(speedup, EpisodeReward, len(GlobalStorage['Counters']['overall_speedup']))
                     GlobalStorage['Locks']['plot_epi'].release()
-                    msg = '{0:.1f}%'.format(GlobalStorage['Counters']['ep']/EP_MAX*100) + ' | WorkerID={}'.format(self.wid) + ' | EpisodeReward: {0:.4f}'.format(EpisodeReward)
+                    msg = '{0:.1f}%'.format(GlobalStorage['Counters']['ep']/EP_MAX*100) + ' | WorkerID={}'.format(self.wid) + '\nEpisodeReward: {0:.4f}'.format(EpisodeReward) + ' | OverallSpeedup: {}'.format(speedup)
                     ColorPrint(Fore.GREEN, msg)
-                    #TODO: record speedup
                     break
         ColorPrint(Fore.YELLOW, 'WorkerID={} stopped'.format(self.wid))
 
