@@ -104,6 +104,7 @@ class PPO(object):
         tf.reset_default_graph()
         self.S_DIM = len(env.observation_space.low)
         self.A_DIM = env.action_space.n
+        self.A_SPACE = 1
         self.sess = tf.Session(graph=tf.get_default_graph())
         self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
         self.ckptLocBase = ckptLocBase
@@ -113,7 +114,7 @@ class PPO(object):
         # critic
         with tf.variable_scope('Critic'):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, 100, activation_function=tf.nn.leaky_relu, norm=True)
+                l1 = self.add_layer(self.tfs, 512, activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Value'):
                 self.v = tf.layers.dense(l1, 1)
             with tf.variable_scope('Loss'):
@@ -124,35 +125,50 @@ class PPO(object):
             with tf.variable_scope('CriticTrain'):
                 self.ctrain_op = tf.train.AdamOptimizer(C_LR).minimize(self.closs)
 
-        # actor
+        # pi: act_probs
         pi, pi_params = self._build_anet('Actor', trainable=True)
         oldpi, oldpi_params = self._build_anet('oldActor', trainable=False)
         # operation of choosing action
-        with tf.variable_scope('ActionsProbs'):
+        with tf.variable_scope('ActionsProb'):
             self.acts_prob = tf.squeeze(pi, axis=0)
         with tf.variable_scope('Update'):
             self.update_oldpi_op = [oldp.assign(p) for p, oldp in zip(pi_params, oldpi_params)]
 
-        self.tfa = tf.placeholder(tf.float32, [None, self.A_DIM], 'action')
-        self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
-        with tf.variable_scope('ppoLoss'):
+        with tf.variable_scope('Actor/PPO-Loss'):
+            self.tfa = tf.placeholder(tf.int32, [None, 1], 'action')
+            self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
+            # probabilities of actions which agent took with policy
+            act_probs = pi * tf.one_hot(indices=self.tfa, depth=pi.shape[1])
+            act_probs = tf.reduce_sum(act_probs, axis=1)
+            # probabilities of actions which old agent took with policy
+            act_probs_old = oldpi * tf.one_hot(indices=self.tfa, depth=oldpi.shape[1])
+            act_probs_old = tf.reduce_sum(act_probs_old, axis=1)
             # add a small number to avoid NaN
-            ratio = pi / (oldpi + 1e-6)
-            # surrogate loss
-            surr = ratio * self.tfadv
+            ratio = tf.divide(act_probs, act_probs_old+1e-6)
+            #ratio = tf.exp(tf.log(act_probs) - tf.log(act_probs_old))
+            surr = tf.multiply(ratio, self.tfadv)
             # clipped surrogate objective
             self.aloss = -tf.reduce_mean(tf.minimum(
                 surr,
                 tf.clip_by_value(ratio, 1. - EPSILON, 1. + EPSILON) * self.tfadv))
+            '''
+            #ratio = pi / (oldpi + 1e-6)
+            # surrogate loss
+            #surr = ratio * self.tfadv
+            # clipped surrogate objective
+            self.aloss = -tf.reduce_mean(tf.minimum(
+                surr,
+                tf.clip_by_value(ratio, 1. - EPSILON, 1. + EPSILON) * self.tfadv))
+            '''
             self.ActorLossSummary = tf.summary.scalar('actor_loss', self.aloss)
 
         with tf.variable_scope('ActorTrain'):
             self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss)
 
-        self.OverallSpeedup = tf.placeholder(tf.float32, name='OverallSpeedup')
-        self.EpisodeReward = tf.placeholder(tf.float32, name='EpisodeReward')
-        self.one = tf.constant(1.0, dtype=tf.float32)
         with tf.variable_scope('Summary'):
+            self.OverallSpeedup = tf.placeholder(tf.float32, name='OverallSpeedup')
+            self.EpisodeReward = tf.placeholder(tf.float32, name='EpisodeReward')
+            self.one = tf.constant(1.0, dtype=tf.float32)
             self.RecordSpeedup_op = tf.multiply(self.OverallSpeedup, self.one)
             self.SpeedupSummary = tf.summary.scalar('OverallSpeedup', self.RecordSpeedup_op)
             self.RecordEpiReward_op = tf.multiply(self.EpisodeReward, self.one)
@@ -179,7 +195,7 @@ class PPO(object):
                 # collect data from all workers
                 data = [GlobalStorage['DataQueue'].get() for _ in range(GlobalStorage['DataQueue'].qsize())]
                 data = np.vstack(data)
-                s, a, r = data[:, :self.S_DIM], data[:, self.S_DIM: self.S_DIM + self.A_DIM], data[:, -1:]
+                s, a, r = data[:, :self.S_DIM], data[:, self.S_DIM: self.S_DIM + self.A_SPACE], data[:, -1:]
                 adv = self.sess.run(self.advantage, {self.tfs: s, self.tfdc_r: r})
                 # update actor and critic in a update loop
                 for _ in range(UPDATE_STEPS):
@@ -262,7 +278,7 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, 100, trainable,activation_function=tf.nn.leaky_relu, norm=True)
+                l1 = self.add_layer(self.tfs, 512, trainable,activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Action_Probs'):
                 probs = self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
@@ -550,13 +566,13 @@ class Worker(object):
             '''
             Our function-name matching mechanism may fail sometimes.
             ex. key='btEmptyAlgorithm::~btEmptyAlgorithm()' will fail
-            This does not matters a lot, so we skip it now ny checking key existence.
+            This does not matters a lot, so we skip it now by checking the key existence.
             '''
             if name in rewards:
                 buffer_s[name].append(np.asarray(featureList, dtype=np.float32))
-                actionFeature = [0]*34
-                actionFeature[action] = 1
-                buffer_a[name].append(actionFeature)
+                #actionFeature = [0]*34
+                #actionFeature[action] = 1
+                buffer_a[name].append(action)
                 buffer_r[name].append(rewards[name])
 
 
