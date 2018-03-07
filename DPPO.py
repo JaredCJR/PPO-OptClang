@@ -28,19 +28,23 @@ import gym, gym_OptClang
 import random, threading, queue, operator, os, sys, re
 from operator import itemgetter
 from random import shuffle
+import random
 from colorama import Fore, Style
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 import time
 import io
+from time import gmtime, strftime
+import argparse
+import pytz
 
 
-EP_MAX = 300
+EP_MAX = 10000
 N_WORKER = 5                # parallel workers
 GAMMA = 0.95                # reward discount factor
 A_LR = 0.0001               # learning rate for actor
-C_LR = 0.0002               # learning rate for critic
-MIN_BATCH_SIZE = 64         # minimum batch size for updating PPO
+C_LR = 2*A_LR               # learning rate for critic
+MIN_BATCH_SIZE = 256        # minimum batch size for updating PPO
 EPSILON = 0.2               # for clipping surrogate objective
 UPDATE_STEPS = 10           # learn multiple times. Because of the PPO will constrain the update speed.
 
@@ -100,7 +104,7 @@ def gen_plot(GraphTitle, InputList):
 
 
 class PPO(object):
-    def __init__(self, env, ckptLocBase, ckptName):
+    def __init__(self, env, ckptLocBase, ckptName, isTraining):
         tf.reset_default_graph()
         self.S_DIM = len(env.observation_space.low)
         self.A_DIM = env.action_space.n
@@ -108,13 +112,21 @@ class PPO(object):
         self.sess = tf.Session(graph=tf.get_default_graph())
         self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
         self.ckptLocBase = ckptLocBase
+        ColorPrint(Fore.LIGHTCYAN_EX, "Log dir={}".format(self.ckptLocBase))
         self.ckptLoc = ckptLocBase + '/' + ckptName
         self.RecordStep = 0
+        if isTraining == 'N':
+            self.isTraining = False
+            ColorPrint(Fore.LIGHTCYAN_EX, "This is inference procedure")
+        else:
+            self.isTraining = True
+            ColorPrint(Fore.LIGHTCYAN_EX, "This is training procedure")
 
         # critic
         with tf.variable_scope('Critic'):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, 512, activation_function=tf.nn.relu, norm=True)
+                l1 = self.add_layer(self.tfs, 256, activation_function=tf.nn.relu, norm=True)
+                #l2 = self.add_layer(l1, 64, activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Value'):
                 self.v = tf.layers.dense(l1, 1)
             with tf.variable_scope('Loss'):
@@ -151,15 +163,6 @@ class PPO(object):
             self.aloss = -tf.reduce_mean(tf.minimum(
                 surr,
                 tf.clip_by_value(ratio, 1. - EPSILON, 1. + EPSILON) * self.tfadv))
-            '''
-            #ratio = pi / (oldpi + 1e-6)
-            # surrogate loss
-            #surr = ratio * self.tfadv
-            # clipped surrogate objective
-            self.aloss = -tf.reduce_mean(tf.minimum(
-                surr,
-                tf.clip_by_value(ratio, 1. - EPSILON, 1. + EPSILON) * self.tfadv))
-            '''
             self.ActorLossSummary = tf.summary.scalar('actor_loss', self.aloss)
 
         with tf.variable_scope('ActorTrain'):
@@ -242,29 +245,9 @@ class PPO(object):
 
         # normalize fully connected product
         if norm:
-            with tf.variable_scope('BatchNormalization'):
-                # Batch Normalize
-                fc_mean, fc_var = tf.nn.moments(
-                    Wx_plus_b,
-                    axes=[0],   # the dimension you wanna normalize, here [0] for batch
-                                # for image, you wanna do [0, 1, 2] for [batch, height, width] but not channel
-                )
-                scale = tf.Variable(tf.ones([out_size]))
-                shift = tf.Variable(tf.zeros([out_size]))
-                epsilon = 0.001
-
-                # apply moving average for mean and var when train on batch
-                ema = tf.train.ExponentialMovingAverage(decay=0.5)
-                def mean_var_with_update():
-                    ema_apply_op = ema.apply([fc_mean, fc_var])
-                    with tf.control_dependencies([ema_apply_op]):
-                        return tf.identity(fc_mean), tf.identity(fc_var)
-                mean, var = mean_var_with_update()
-
-                Wx_plus_b = tf.nn.batch_normalization(Wx_plus_b, mean, var, shift, scale, epsilon)
-                # similar with this two steps:
-                # Wx_plus_b = (Wx_plus_b - fc_mean) / tf.sqrt(fc_var + 0.001)
-                # Wx_plus_b = Wx_plus_b * scale + shift
+            # Batch Normalize
+            Wx_plus_b = tf.contrib.layers.batch_norm(
+                    Wx_plus_b, updates_collections=None, is_training=self.isTraining)
 
         # activation
         if activation_function is None:
@@ -278,7 +261,8 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, 512, trainable,activation_function=tf.nn.relu, norm=True)
+                l1 = self.add_layer(self.tfs, 256, trainable,activation_function=tf.nn.relu, norm=True)
+                #l2 = self.add_layer(l1, 64, trainable,activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Action_Probs'):
                 probs = self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
@@ -311,14 +295,21 @@ class PPO(object):
         # sort with probs in descending order
         probList.sort(key=itemgetter(1), reverse=True)
         # find the one that is not applied yet
-        for actionProb in probList:
+        idx = 0
+        while True:
             '''
             During training, we need some chance to get unexpected action to let
             the agent face different conditions as much as possible.
             '''
             # TODO: change the strategy for different situations
-            #PassIdx = actionProb[0] # inference without online-learning use this to get the most possible action
-            PassIdx = np.random.choice(np.arange(self.A_DIM), p=a_probs.ravel()) # training use this
+            prob = random.uniform(0, 1)
+            if prob < 0.5:
+                # the most possible action
+                PassIdx = probList[idx][0]
+                idx += 1
+            else:
+                # random action based on the prediction
+                PassIdx = np.random.choice(np.arange(self.A_DIM), p=a_probs.ravel())
             #print('PassIdx={} with {} prob'.format(PassIdx, actionProb[1]))
             if PassIdx not in PassHistory:
                 PassHistory[PassIdx] = 'Used'
@@ -341,6 +332,7 @@ class Worker(object):
     def getMostInfluentialState(self, states, ResetInfo):
         """
         return the most influential features from profiled data.
+        (However, it has some random chance to choose other function)
         If not profiled, random pick.
         If the function name does not match in the fetures, try others based on the usage
         in descending order.
@@ -357,8 +349,36 @@ class Worker(object):
             '''
             select the function with the maximum usage
             '''
-            key = max(Stats.items(), key=operator.itemgetter(1))[0]
-        #key = "hi_function"
+            #key = max(Stats.items(), key=operator.itemgetter(1))[0]
+            '''
+            select the function with probilities which from profiled usage
+            '''
+            FunctionList = list(states.keys())
+            done = False
+            # build list of [key, usage]
+            UsageList = []
+            for name, usage in Stats.items():
+                UsageList.append([name, usage])
+            # based on the usage, sort it
+            sorted(UsageList, key=operator.itemgetter(1), reverse=True)
+            NameList = []
+            UsageTmpList = []
+            for item in UsageList:
+                NameList.append(item[0])
+                UsageTmpList.append(item[1])
+            # 80% based on the usage
+            prob = random.uniform(0, 1)
+            if prob < 0.8:
+                # for python 3.6
+                #key = random.choice(NameList, weights=UsageTmpList)[0]
+                # for python 3.5
+                choiceList = []
+                UsageSum = sum(UsageTmpList)
+                for index, elem in enumerate(UsageTmpList):
+                    choiceList += NameList[index] * int((UsageTmpList[index]/UsageSum)*100)
+                key = random.choice(choiceList)
+            else:
+                key = random.choice(FunctionList)
         try:
             retVec = states[key]
         except KeyError:
@@ -366,23 +386,9 @@ class Worker(object):
             Random selection will never come to here.
             This is caused by perf profiled information which does not contain the function arguments.
             '''
-            #print("Using re to search C++ style name\nKey error:\nkey={}\ndict.keys()={}\n".format(key, states.keys()))
             try:
-                FunctionList = list(states.keys())
-                done = False
-                # build list of [key, usage]
-                UsageList = []
-                for name, usage in Stats.items():
-                    UsageList.append([name, usage])
-                # based on the usage, sort it
-                sorted(UsageList, key=operator.itemgetter(1), reverse=True)
                 # use RegExp to search C++ style name or ambiguity of arguments.
-                NameList = []
-                UsageTmpList = []
                 done = False
-                for item in UsageList:
-                    NameList.append(item[0])
-                    UsageTmpList.append(item[1])
                 for cand in NameList:
                     # searching based on the usage order in descending.
                     realKey = self.RegExpSearch(cand, FunctionList)
@@ -480,6 +486,12 @@ class Worker(object):
         Therefore, 2x is necessary.
         '''
         SigmaRatio = abs_delta_total_cycles/(2*sigma_total_cycles)
+        if SigmaRatio < 0.5:
+            SigmaRatio *= 0.25
+        elif SigmaRatio < 1.0:
+            SigmaRatio *= 0.5
+        else:
+            SigmaRatio *= 2.0
         UsageNumOverAll = 0
         for name, usage in newAllUsageDict.items():
             if usage is not None:
@@ -535,10 +547,7 @@ class Worker(object):
                 new_function_cycles = new_total_cycles * new_usage
                 delta_function_cycles = old_function_cycles - new_function_cycles
                 reward = Alpha*SigmaRatio*(delta_function_cycles/old_function_cycles)
-            #print("FunctionName={}, reward={}".format(FunctionName, reward))
-            #print("Alpha={}".format(Alpha))
             rewards[FunctionName] = reward
-        #print("UsageProfiledRatio={}".format(UsageProfiledRatio))
         # return newAllUsageDict to be the "old" for next episode
         return rewards, newAllUsageDict
 
@@ -668,7 +677,7 @@ class Worker(object):
         formatted = "%.3f" % speedup
         return float(formatted)
 
-    def DrawPltToTf(self, speedup, overall_reward, step):
+    def DrawToTf(self, speedup, overall_reward, step):
         result = self.ppo.sess.run(
                     tf.summary.merge([self.ppo.SpeedupSummary, self.ppo.EpiRewardSummary]),
                     feed_dict={self.ppo.OverallSpeedup: speedup,
@@ -713,7 +722,9 @@ class Worker(object):
                 If build failed, skip it.
                 '''
                 if reward < 0:
-                    ColorPrint(Fore.RED, 'Failed. Use new target and forget these memories')
+                    # clear history of applied passes
+                    PassHistory = {}
+                    ColorPrint(Fore.RED, 'env.step() Failed. Use new target and forget these memories')
                     break
 
                 '''
@@ -787,9 +798,9 @@ class Worker(object):
                     '''
                     draw to tensorboard
                     '''
-                    self.DrawPltToTf(speedup, EpisodeReward, len(GlobalStorage['Counters']['overall_speedup']))
+                    self.DrawToTf(speedup, EpisodeReward, len(GlobalStorage['Counters']['overall_speedup']))
                     GlobalStorage['Locks']['plot_epi'].release()
-                    msg = '{0:.1f}%'.format(GlobalStorage['Counters']['ep']/EP_MAX*100) + ' | WorkerID={}'.format(self.wid) + '\nEpisodeReward: {0:.4f}'.format(EpisodeReward) + ' | OverallSpeedup: {}'.format(speedup)
+                    msg = '{0:}/{1:} ({2:.1f}%)'.format(GlobalStorage['Counters']['ep'], EP_MAX,GlobalStorage['Counters']['ep']/EP_MAX*100) + ' | WorkerID={}'.format(self.wid) + '\nEpisodeReward: {0:.4f}'.format(EpisodeReward) + ' | OverallSpeedup: {}'.format(speedup)
                     ColorPrint(Fore.GREEN, msg)
                     break
         ColorPrint(Fore.YELLOW, 'WorkerID={} stopped'.format(self.wid))
@@ -798,8 +809,22 @@ class Worker(object):
 
 if __name__ == '__main__':
     Game='OptClang-v0'
+    date = datetime.now(pytz.timezone('Asia/Taipei')).strftime("%m-%d_%H-%M")
+    parser = argparse.ArgumentParser(
+            description='\"Log dir\" and NN related settings\nex.\n$./DPPO.py -l ./logs -t Y\n')
+    parser.add_argument('-l', '--logdir', type=str, nargs='?',
+                        default='./log_' + date,
+                        help='Log directory to save and restore the NN model',
+                        required=False)
+    parser.add_argument('-t', '--training', type=str, nargs='?',
+                        default='Y',
+                        help='Is this run will be training procedure?\n\"Y\"=Training, \"N\"=Inference',
+                        required=False)
+    args = vars(parser.parse_args())
     # path for save and restore the model
-    GlobalPPO = PPO(gym.make(Game).unwrapped, './logs', 'model.ckpt')
+    GlobalPPO = PPO(gym.make(Game).unwrapped,
+            args['logdir'], 'model.ckpt',
+            isTraining=args['training'])
     # remove worker file list.
     WorkerListLoc = "/tmp/gym-OptClang-WorkerList"
     if os.path.exists(WorkerListLoc):
