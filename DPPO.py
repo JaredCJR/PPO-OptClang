@@ -39,11 +39,11 @@ import argparse
 import pytz
 
 
-EP_MAX = 10000
+EP_MAX = 100000
 N_WORKER = 5                # parallel workers
 GAMMA = 0.95                # reward discount factor
-A_LR = 0.0001               # learning rate for actor
-C_LR = 2*A_LR               # learning rate for critic
+A_LR = 0.001               # learning rate for actor
+C_LR = 5*A_LR               # learning rate for critic
 MIN_BATCH_SIZE = 256        # minimum batch size for updating PPO
 EPSILON = 0.2               # for clipping surrogate objective
 UPDATE_STEPS = 10           # learn multiple times. Because of the PPO will constrain the update speed.
@@ -504,7 +504,7 @@ class Worker(object):
             '''
             The Alpha and Beta need to be tuned.
             '''
-            Alpha = 2
+            Alpha = 20
             Beta = 2
             isSpeedup = False
             isSlowDown = False
@@ -724,7 +724,7 @@ class Worker(object):
                 if reward < 0:
                     # clear history of applied passes
                     PassHistory = {}
-                    ColorPrint(Fore.RED, 'env.step() Failed. Use new target and forget these memories')
+                    ColorPrint(Fore.RED, 'WorkerID={} env.step() Failed. Use new target and forget these memories'.format(self.wid))
                     break
 
                 '''
