@@ -40,8 +40,9 @@ import pytz
 import Helpers as hp
 
 class PPO(object):
-    def __init__(self, env, ckptLocBase, ckptName, isTraining, SharedStorage, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth):
+    def __init__(self, env, ckptLocBase, ckptName, isTraining, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth, SharedStorage=None):
         tf.reset_default_graph()
+        # if SharedStorage is None, it must be in inference mode without "update()"
         self.SharedStorage = SharedStorage
         self.EP_MAX = EP_MAX
         self.GAMMA = GAMMA
@@ -220,7 +221,7 @@ class PPO(object):
         """
         s = s[np.newaxis, :]
         a_probs = self.sess.run(self.acts_prob, {self.tfs: s})
-        print(a_probs)
+        #print(a_probs)
         '''
         choose the one that was not applied yet
         '''
@@ -243,15 +244,19 @@ class PPO(object):
             During training, we need some chance to get unexpected action to let
             the agent face different conditions as much as possible.
             '''
-            # TODO: change the strategy for different situations
-            prob = random.uniform(0, 1)
-            if prob < 0.5:
-                # the most possible action
+            # Use different strategies for different situations
+            if self.isTraining == True:
+                prob = random.uniform(0, 1)
+                if prob < 0.9:
+                    # the most possible action
+                    PassIdx = probList[idx][0]
+                    idx += 1
+                else:
+                    # random action based on the prediction
+                    PassIdx = np.random.choice(np.arange(self.A_DIM), p=a_probs.ravel())
+            else:
                 PassIdx = probList[idx][0]
                 idx += 1
-            else:
-                # random action based on the prediction
-                PassIdx = np.random.choice(np.arange(self.A_DIM), p=a_probs.ravel())
             #print('PassIdx={} with {} prob'.format(PassIdx, actionProb[1]))
             if PassIdx not in PassHistory:
                 PassHistory[PassIdx] = 'Used'

@@ -47,42 +47,8 @@ C_LR = config['RL_Parameters']['C_LR']
 # learn multiple times. Because of the PPO will constrain the update speed.
 UpdateDepth = config['RL_Parameters']['UpdateDepth']
 
-"""
-Shared vars
-"""
-'''
-All the methods in Python threading.events are atomic operations.
-https://docs.python.org/3/library/threading.html
-'''
-SharedEvents = {}
-SharedEvents['update'] = threading.Event()
-SharedEvents['update'].clear()            # not update now
-SharedEvents['collect'] = threading.Event()
-SharedEvents['collect'].set()             # start to collect
-# prevent race condition with 3 locks
-Locks = {}
-Locks['queue'] = threading.Lock()
-Locks['counter'] = threading.Lock()
-Locks['plot_epi'] = threading.Lock()
-# counters for synchrnization
-SharedCounters = {}
-SharedCounters['ep'] = 0
-SharedCounters['update_counter'] = 0
-SharedCounters['running_reward'] = []
-SharedCounters['overall_speedup'] = []
-# a global dict to access everything
-SharedStorage = {}
-SharedStorage['Events'] = SharedEvents
-SharedStorage['Locks'] = Locks
-SharedStorage['Counters'] = SharedCounters
-# coordinator for threads
-SharedStorage['Coordinator'] = tf.train.Coordinator()
-# workers putting data in this queue
-SharedStorage['DataQueue'] = queue.Queue()
-
-"""
-helper functions
-"""
+# Initialize the necessary vars
+SharedStorage = hp.InitSharedStorage()
 
 class Worker(object):
     def __init__(self, WorkerID, SharedStorage):

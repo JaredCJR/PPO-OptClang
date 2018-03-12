@@ -28,6 +28,41 @@ import DPPO
 import Helpers as hp
 import json
 
+def InitSharedStorage():
+    """
+    Shared vars
+    """
+    '''
+    All the methods in Python threading.events are atomic operations.
+    https://docs.python.org/3/library/threading.html
+    '''
+    SharedEvents = {}
+    SharedEvents['update'] = threading.Event()
+    SharedEvents['update'].clear()            # not update now
+    SharedEvents['collect'] = threading.Event()
+    SharedEvents['collect'].set()             # start to collect
+    # prevent race condition with 3 locks
+    Locks = {}
+    Locks['queue'] = threading.Lock()
+    Locks['counter'] = threading.Lock()
+    Locks['plot_epi'] = threading.Lock()
+    # counters for synchrnization
+    SharedCounters = {}
+    SharedCounters['ep'] = 0
+    SharedCounters['update_counter'] = 0
+    SharedCounters['running_reward'] = []
+    SharedCounters['overall_speedup'] = []
+    # a global dict to access everything
+    SharedStorage = {}
+    SharedStorage['Events'] = SharedEvents
+    SharedStorage['Locks'] = Locks
+    SharedStorage['Counters'] = SharedCounters
+    # coordinator for threads
+    SharedStorage['Coordinator'] = tf.train.Coordinator()
+    # workers putting data in this queue
+    SharedStorage['DataQueue'] = queue.Queue()
+    return SharedStorage
+
 def LoadJsonConfig(path):
     with open(path, 'r') as f:
         data = json.load(f)
@@ -90,9 +125,9 @@ class EnvCalculator(object):
             for item in UsageList:
                 NameList.append(item[0])
                 UsageTmpList.append(item[1])
-            # 80% based on the usage
+            # 90% based on the usage
             prob = random.uniform(0, 1)
-            if prob < 0.8:
+            if prob < 0.9:
                 # for python 3.6
                 #key = random.choice(NameList, weights=UsageTmpList)[0]
                 # for python 3.5
