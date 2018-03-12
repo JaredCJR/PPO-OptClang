@@ -28,16 +28,24 @@ import DPPO
 import Helpers as hp
 from Helpers import EnvCalculator as calc
 
-#----------------Worker hyper-parameters-----------------#
-EP_MAX = 10000
-N_WORKER = 5                # parallel workers
-GAMMA = 0.95                # reward discount factor
-MIN_BATCH_SIZE = 256        # minimum batch size for updating PPO
+config = hp.LoadJsonConfig('./config.json')
+#----------------Worker hyper-parameters()-----------------#
+EP_MAX = config['WorkerParameters']['EP_MAX']
+# parallel workers
+N_WORKER = config['WorkerParameters']['N_WORKER']
+# minimum batch size for updating PPO
+MIN_BATCH_SIZE = config['WorkerParameters']['MIN_BATCH_SIZE']
+# reward discount factor
+GAMMA = config['WorkerParameters']['GAMMA']
 #----------------PPO hyper-parameters--------------------#
-ClippingEpsilon = 0.2               # for clipping surrogate objective
-A_LR = 0.001               # learning rate for actor
-C_LR = 5*A_LR               # learning rate for critic
-UpdateDepth = 10           # learn multiple times. Because of the PPO will constrain the update speed.
+# for clipping surrogate objective
+ClippingEpsilon = config['RL_Parameters']['ClippingEpsilon']
+# learning rate for actor
+A_LR = config['RL_Parameters']['A_LR']
+# learning rate for critic
+C_LR = config['RL_Parameters']['C_LR']
+# learn multiple times. Because of the PPO will constrain the update speed.
+UpdateDepth = config['RL_Parameters']['UpdateDepth']
 
 """
 Shared vars
@@ -256,8 +264,11 @@ if __name__ == '__main__':
         hp.ColorPrint(Fore.RED, "Some of the workers cannot be stopped within 1 sec.\nYou can ignore the messages after this msg.")
 
     # plot changes of rewards
+    '''
     plt.plot(np.arange(len(SharedStorage['Counters']['running_reward'])), SharedStorage['Counters']['running_reward'])
     plt.xlabel('Episode')
     plt.ylabel('Moving reward')
     plt.savefig('running_rewards.png')
     hp.ColorPrint(Fore.RED, 'running_rewards.png is saved.')
+    '''
+    # use tensorboard to see the graphs is better than plt method.

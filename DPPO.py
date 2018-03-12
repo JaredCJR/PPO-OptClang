@@ -76,7 +76,7 @@ class PPO(object):
                 self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
                 self.advantage = self.tfdc_r - self.v
                 self.closs = tf.reduce_mean(tf.square(self.advantage))
-                self.CriticLossSummary = tf.summary.scalar('critic_loss', self.closs)
+                self.CriticLossSummary = tf.summary.scalar('CriticLoss_LowerBetter', self.closs)
             with tf.variable_scope('CriticTrain'):
                 self.ctrain_op = tf.train.AdamOptimizer(self.C_LR).minimize(self.closs)
 
@@ -106,7 +106,7 @@ class PPO(object):
             self.aloss = -tf.reduce_mean(tf.minimum(
                 surr,
                 tf.clip_by_value(ratio, 1.-self.ClippingEpsilon, 1.+self.ClippingEpsilon)*self.tfadv))
-            self.ActorLossSummary = tf.summary.scalar('actor_loss', self.aloss)
+            self.ActorLossSummary = tf.summary.scalar('ActorLoss_HigherBetter', self.aloss)
 
         with tf.variable_scope('ActorTrain'):
             self.atrain_op = tf.train.AdamOptimizer(self.A_LR).minimize(self.aloss)

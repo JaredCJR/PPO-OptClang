@@ -14,7 +14,9 @@ Dependencies
 
 Training
 ----------------------------------------
-`python3 main.py`
+`python3 run.py`
+`python3 ./run.py -h` for more details.
+`config.json` contains the hyper-parameters for RL-model and workers.
 
 
 Test trained policy
