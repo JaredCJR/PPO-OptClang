@@ -214,10 +214,13 @@ class PPO(object):
     def choose_action(self, s, PassHistory):
         """
         return a int from 0 to 33
+        Input "s" must be numpy array.
         In the world of reinforcement learning, the action space is from 0 to 33.
         However, in the world of modified-clang, the accepted passes are from 1 to 34.
         Therefore, "gym-OptClang" already done this effort for us.
         We don't have to bother this by ourselves.
+        However, if you use the model withou gym-OptClang, you have to convert by yourself.
+        e.g. Inference example in our examples.
         """
         s = s[np.newaxis, :]
         a_probs = self.sess.run(self.acts_prob, {self.tfs: s})
