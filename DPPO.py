@@ -40,7 +40,7 @@ import pytz
 import Helpers as hp
 
 class PPO(object):
-    def __init__(self, env, ckptLocBase, ckptName, isTraining, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth, SharedStorage=None):
+    def __init__(self, env, ckptLocBase, ckptName, isTraining, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth, L1Neurons, SharedStorage=None):
         tf.reset_default_graph()
         # if SharedStorage is None, it must be in inference mode without "update()"
         self.SharedStorage = SharedStorage
@@ -50,6 +50,7 @@ class PPO(object):
         self.C_LR = C_LR
         self.ClippingEpsilon = ClippingEpsilon
         self.UpdateDepth = UpdateDepth
+        self.L1Neurons = L1Neurons
         self.S_DIM = len(env.observation_space.low)
         self.A_DIM = env.action_space.n
         self.A_SPACE = 1
@@ -69,7 +70,7 @@ class PPO(object):
         # critic
         with tf.variable_scope('Critic'):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, 256, activation_function=tf.nn.relu, norm=True)
+                l1 = self.add_layer(self.tfs, self.L1Neurons, activation_function=tf.nn.relu, norm=True)
                 #l2 = self.add_layer(l1, 64, activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Value'):
                 self.v = tf.layers.dense(l1, 1)
@@ -204,7 +205,7 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, 256, trainable,activation_function=tf.nn.relu, norm=True)
+                l1 = self.add_layer(self.tfs, self.L1Neurons, trainable,activation_function=tf.nn.relu, norm=True)
                 #l2 = self.add_layer(l1, 64, trainable,activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Action_Probs'):
                 probs = self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)

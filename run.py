@@ -46,6 +46,8 @@ A_LR = config['RL_Parameters']['A_LR']
 C_LR = config['RL_Parameters']['C_LR']
 # learn multiple times. Because of the PPO will constrain the update speed.
 UpdateDepth = config['RL_Parameters']['UpdateDepth']
+# number of L1 neurons
+L1Neurons = config['RL_Parameters']['L1Neurons']
 
 # Initialize the necessary vars
 SharedStorage = hp.InitSharedStorage()
@@ -204,6 +206,7 @@ if __name__ == '__main__':
             A_LR=A_LR,
             C_LR=C_LR,
             ClippingEpsilon=ClippingEpsilon,
+            L1Neurons=L1Neurons,
             UpdateDepth=UpdateDepth)
     # remove worker file list.
     WorkerListLoc = "/tmp/gym-OptClang-WorkerList"

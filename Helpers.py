@@ -242,12 +242,13 @@ class EnvCalculator(object):
         sigma_total_cycles = MeanSigmaDict[target]['sigma']
 
         #####    test:only use total cycles as speedup     #####
+        """
         reward = (delta_total_cycles / old_total_cycles) * 10
         for FunctionName in AllFunctions:
             rewards[FunctionName] = reward
+        """
 
         ##### Original #####
-        """
         '''
         95% of results are in the twice sigma.
         Therefore, 2x is necessary.
@@ -316,7 +317,6 @@ class EnvCalculator(object):
                 reward = Alpha*SigmaRatio*(delta_function_cycles/old_function_cycles)
             rewards[FunctionName] = reward
         # return newAllUsageDict to be the "old" for next episode
-        """
         return rewards, newAllUsageDict
 
     def appendStateRewards(buffer_s, buffer_a, buffer_r, states, rewards, action):

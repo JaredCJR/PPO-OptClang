@@ -1,14 +1,15 @@
 {
   "WorkerParameters": {
-              "EP_MAX"         :10000,
+              "EP_MAX"         :5000,
               "N_WORKER"       :5,
-              "MIN_BATCH_SIZE" :256,
+              "MIN_BATCH_SIZE" :32,
               "GAMMA"          :0.95
                       },
   "RL_Parameters":    {
               "ClippingEpsilon":0.2,
-              "A_LR"           :0.001,
-              "C_LR"           :0.01,
-              "UpdateDepth"    :10
+              "A_LR"           :0.01,
+              "C_LR"           :0.02,
+              "UpdateDepth"    :5
+              "L1Neurons"      :256
                       }
 }
