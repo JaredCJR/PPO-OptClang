@@ -1,12 +1,13 @@
 {
   "_comment":         {
-               "GAMMA: the decaying rate for rewards;",
-               "ClippingEpsilon: the epsilon in PPO algorithm;",
-               "A_LR: learning rate for actor;",
-               "C_LR: learning rate for critic;",
-               "UpdateDepth: Due to RL may converge very slow, update multiple times for a batch of data.",
-               "L1Neurons: the number of neurons in hidden layer 1;",
-               "L2Neurons: the number of neurons in hidden layer 1;"
+               "These are comments for the following parameters": "",
+               "GAMMA": "the decaying rate for rewards;",
+               "ClippingEpsilon": "the epsilon in PPO algorithm;",
+               "A_LR": "learning rate for actor;",
+               "C_LR": "learning rate for critic;",
+               "UpdateDepth": "Due to RL may converge very slow, update multiple times for a batch of data.",
+               "L1Neurons": "the number of neurons in hidden layer 1;",
+               "L2Neurons": "the number of neurons in hidden layer 1;"
                       },
   "WorkerParameters": {
               "EP_MAX"         :5000,
