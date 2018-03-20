@@ -18,6 +18,9 @@ Training
 `python3 ./run.py -h` for more details.  
 `config.json` contains the hyper-parameters for RL-model and workers.  
 
+Inference
+---------------------------------------
+Refer to [ThesisTools](https://github.com/JaredCJR/ThesisTools#how-to-use-the-trained-model-to-inference)
 
 Test trained policy
 ----------------------------------------
