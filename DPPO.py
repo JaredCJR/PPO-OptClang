@@ -40,7 +40,7 @@ import pytz
 import Helpers as hp
 
 class PPO(object):
-    def __init__(self, env, ckptLocBase, ckptName, isTraining, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth, L1Neurons, SharedStorage=None):
+    def __init__(self, env, ckptLocBase, ckptName, isTraining, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth, L1Neurons, L2Neurons, SharedStorage=None):
         tf.reset_default_graph()
         # if SharedStorage is None, it must be in inference mode without "update()"
         self.SharedStorage = SharedStorage
@@ -51,6 +51,7 @@ class PPO(object):
         self.ClippingEpsilon = ClippingEpsilon
         self.UpdateDepth = UpdateDepth
         self.L1Neurons = L1Neurons
+        self.L2Neurons = L2Neurons
         self.S_DIM = len(env.observation_space.low)
         self.A_DIM = env.action_space.n
         self.A_SPACE = 1
@@ -71,9 +72,13 @@ class PPO(object):
         with tf.variable_scope('Critic'):
             with tf.variable_scope('Fully_Connected'):
                 l1 = self.add_layer(self.tfs, self.L1Neurons, activation_function=tf.nn.relu, norm=True)
-                #l2 = self.add_layer(l1, 64, activation_function=tf.nn.relu, norm=True)
+                if self.L2Neurons != 0:
+                    l2 = self.add_layer(l1, self.L2Neurons, activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Value'):
-                self.v = tf.layers.dense(l1, 1)
+                if self.L2Neurons != 0:
+                    self.v = tf.layers.dense(l2, 1)
+                else:
+                    self.v = tf.layers.dense(l1, 1)
             with tf.variable_scope('Loss'):
                 self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
                 self.advantage = self.tfdc_r - self.v
@@ -101,13 +106,13 @@ class PPO(object):
             act_probs_old = oldpi * tf.one_hot(indices=self.tfa, depth=oldpi.shape[1])
             act_probs_old = tf.reduce_sum(act_probs_old, axis=1)
             # add a small number to avoid NaN
-            ratio = tf.divide(act_probs, act_probs_old+1e-6)
-            #ratio = tf.exp(tf.log(act_probs) - tf.log(act_probs_old))
+            ratio = tf.divide(act_probs, act_probs_old+1e-7)
+            #ratio = tf.exp(tf.log(act_probs) - tf.log(act_probs_old)) # this may lead loss to NaN
             surr = tf.multiply(ratio, self.tfadv)
+            clip = tf.clip_by_value(ratio, 1.-self.ClippingEpsilon, 1.+self.ClippingEpsilon)*self.tfadv
             # clipped surrogate objective
-            self.aloss = -tf.reduce_mean(tf.minimum(
-                surr,
-                tf.clip_by_value(ratio, 1.-self.ClippingEpsilon, 1.+self.ClippingEpsilon)*self.tfadv))
+            self.aloss = -tf.reduce_mean(tf.minimum(surr, clip))
+            # visualizing
             self.ActorLossSummary = tf.summary.scalar('ActorLoss', self.aloss)
 
         with tf.variable_scope('ActorTrain'):
@@ -131,6 +136,9 @@ class PPO(object):
         if tf.train.checkpoint_exists(self.ckptLoc):
             self.saver.restore(self.sess, self.ckptLoc)
             hp.ColorPrint(Fore.LIGHTGREEN_EX, 'Restore the previous model.')
+        elif self.isTraining == False:
+            hp.ColorPrint(Fore.LIGHTRED_EX, "Missing trained model to inference, exit.")
+            sys.exit(1)
 
     def update(self):
         while not self.SharedStorage['Coordinator'].should_stop():
@@ -206,9 +214,13 @@ class PPO(object):
         with tf.variable_scope(name):
             with tf.variable_scope('Fully_Connected'):
                 l1 = self.add_layer(self.tfs, self.L1Neurons, trainable,activation_function=tf.nn.relu, norm=True)
-                #l2 = self.add_layer(l1, 64, trainable,activation_function=tf.nn.relu, norm=True)
+                if self.L2Neurons != 0:
+                    l2 = self.add_layer(l1, self.L2Neurons, trainable,activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Action_Probs'):
-                probs = self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
+                if self.L2Neurons != 0:
+                    probs = self.add_layer(l2, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
+                else:
+                    probs = self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
         return probs, params
 
