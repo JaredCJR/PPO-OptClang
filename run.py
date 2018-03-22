@@ -48,6 +48,8 @@ C_LR = config['RL_Parameters']['C_LR']
 UpdateDepth = config['RL_Parameters']['UpdateDepth']
 # number of L1 neurons
 L1Neurons = config['RL_Parameters']['L1Neurons']
+# number of L2 neurons
+L2Neurons = config['RL_Parameters']['L2Neurons']
 
 # Initialize the necessary vars
 SharedStorage = hp.InitSharedStorage()
@@ -207,6 +209,7 @@ if __name__ == '__main__':
             C_LR=C_LR,
             ClippingEpsilon=ClippingEpsilon,
             L1Neurons=L1Neurons,
+            L2Neurons=L2Neurons,
             UpdateDepth=UpdateDepth)
     # remove worker file list.
     WorkerListLoc = "/tmp/gym-OptClang-WorkerList"

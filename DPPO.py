@@ -140,9 +140,23 @@ class PPO(object):
             hp.ColorPrint(Fore.LIGHTRED_EX, "Missing trained model to inference, exit.")
             sys.exit(1)
 
+    def save(self):
+        """
+        Save model
+        """
+        self.saver.save(self.sess, self.ckptLoc)
+
     def update(self):
+        UpdateCount = 0
         while not self.SharedStorage['Coordinator'].should_stop():
             if self.SharedStorage['Counters']['ep'] < self.EP_MAX:
+                if UpdateCount % 100 == 0:
+                    self.save()
+                    hp.ColorPrint(Fore.LIGHTBLUE_EX, "Save for every 100 updates.")
+                else:
+                    hp.ColorPrint(Fore.LIGHTBLUE_EX,
+                            "This update does not need to be saved: {}".format(UpdateCount))
+                UpdateCount += 1
                 # wait until get batch of data
                 self.SharedStorage['Events']['update'].wait()
                 # copy pi to old pi
@@ -172,10 +186,6 @@ class PPO(object):
                 self.writer.add_summary(result, self.RecordStep)
                 #self.writer.flush()
                 self.RecordStep += 1
-                '''
-                Save the model
-                '''
-                self.saver.save(self.sess, self.ckptLoc)
 
                 # updating finished
                 self.SharedStorage['Events']['update'].clear()
