@@ -255,11 +255,11 @@ class EnvCalculator(object):
         '''
         SigmaRatio = abs_delta_total_cycles/(2*sigma_total_cycles)
         if SigmaRatio < 0.5:
-            SigmaRatio *= 0.25
+            #SigmaRatio *= 0.25
+            SigmaRatio *= 0.1 # 68% data may be the error, are not that important.
         elif SigmaRatio < 1.0:
-            SigmaRatio *= 0.5
-        else:
-            SigmaRatio *= 2.0
+            SigmaRatio *= 0.5 # 95%-68% data is not that convincing.
+
         UsageNumOverAll = 0
         for name, usage in newAllUsageDict.items():
             if usage is not None:
@@ -281,6 +281,10 @@ class EnvCalculator(object):
                 This function does not matters
                 '''
                 UseOverallPerf = True
+            # treat the function that miss either old or new usage as the both not profiled function.
+            elif old_usage is None or new_usage is None:
+                UseOverallPerf = True
+                """
             elif old_usage is None:
                 '''
                 may be slow down
@@ -295,20 +299,25 @@ class EnvCalculator(object):
                 UseOverallPerf = True
                 Alpha *= Beta
                 isSpeedup = True
+                """
             else:
                 '''
                 This may be more accurate
                 How important: based on how many functions are profiled.
                 '''
                 UseOverallPerf = False
-                Alpha = Alpha*(Beta*(1 / UsageProfiledRatio)) * 2 # more important
+                #Alpha = Alpha*(Beta*(1 / UsageProfiledRatio)) * 2 # more important
+                Alpha = Alpha*Beta*4 # more important
+                #print("UsageProfiledRatio={}".format(UsageProfiledRatio))
             if UseOverallPerf:
+                '''
                 if isSlowDown == True and delta_total_cycles > 0:
                     Alpha /= Beta
                     #delta_total_cycles *= -1
                 elif isSpeedup == True and delta_total_cycles < 0:
                     Alpha /= Beta
                     #delta_total_cycles *= -1
+                '''
                 reward = Alpha*SigmaRatio*(delta_total_cycles/old_total_cycles)
             else:
                 old_function_cycles = old_total_cycles * old_usage
@@ -320,12 +329,11 @@ class EnvCalculator(object):
         return rewards, newAllUsageDict
 
     def appendStateRewards(buffer_s, buffer_a, buffer_r, states, rewards, action):
-        #FIXME: do we need to discard some results that the rewards are not that important?
         """
         No return value, they are append inplace in buffer_x
         buffer_s : dict of np.array as features
         buffer_a : dict of list of actions(int)
-        buffer_r : dict of list of rewards(float)
+        buffer_r : dict of rewards(float)
         """
         tmpStates = states.copy()
         for name, featureList in tmpStates.items():
@@ -343,16 +351,12 @@ class EnvCalculator(object):
             '''
             Our function-name matching mechanism may fail sometimes.
             ex. key='btEmptyAlgorithm::~btEmptyAlgorithm()' will fail
-            This does not matters a lot, so we skip it now by checking the key existence.
+            This does not matter a lot, so we skip it now by checking the key existence.
             '''
             if name in rewards:
                 buffer_s[name].append(np.asarray(featureList, dtype=np.float32))
-                #actionFeature = [0]*34
-                #actionFeature[action] = 1
                 buffer_a[name].append(action)
                 buffer_r[name].append(rewards[name])
-
-
 
     def calcDiscountedRewards(buffer_r, nextObs, ppo):
         """
@@ -430,6 +434,26 @@ class EnvCalculator(object):
             list_a.extend(buffer_a[name])
             list_r.extend(buffer_r[name])
         return np.vstack(list_s), np.vstack(list_a), np.vstack(list_r)
+
+    def RemoveTrivialData(vstack_s, vstack_a, vstack_r):
+        """
+        Too many not important data, we need to remove some.
+        Input: np.array * 3
+        Return: np.array * 3
+        """
+        # goal: remove the reward data smaller than 20 percentile(abs)
+        abs_r = np.fabs(vstack_r)
+        r_threshold = np.percentile(abs_r, 20)
+        rmIndices = []
+        idx = 0
+        for index, value in np.ndenumerate(abs_r):
+            if value < r_threshold:
+                rmIndices.append(idx)
+            idx += 1
+        vstack_s = np.delete(vstack_s, rmIndices, 0)
+        vstack_a = np.delete(vstack_a, rmIndices, 0)
+        vstack_r = np.delete(vstack_r, rmIndices, 0)
+        return vstack_s, vstack_a, vstack_r
 
     def calcOverallSpeedup(ResetInfo, Info):
         """
