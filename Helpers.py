@@ -442,6 +442,9 @@ class EnvCalculator(object):
         Return: np.array * 3
         """
         # goal: remove the reward data smaller than 20 percentile(abs)
+        orig_s = vstack_s
+        orig_a = vstack_a
+        orig_r = vstack_r
         abs_r = np.fabs(vstack_r)
         r_threshold = np.percentile(abs_r, 20)
         rmIndices = []
@@ -453,6 +456,11 @@ class EnvCalculator(object):
         vstack_s = np.delete(vstack_s, rmIndices, 0)
         vstack_a = np.delete(vstack_a, rmIndices, 0)
         vstack_r = np.delete(vstack_r, rmIndices, 0)
+        # avoid queue become empty.
+        if vstack_s.size == 0:
+            vstack_s = orig_s
+            vstack_a = orig_a
+            vstack_r = orig_r
         return vstack_s, vstack_a, vstack_r
 
     def calcOverallSpeedup(ResetInfo, Info):

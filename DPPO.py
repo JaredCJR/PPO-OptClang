@@ -150,6 +150,9 @@ class PPO(object):
         UpdateCount = 0
         while not self.SharedStorage['Coordinator'].should_stop():
             if self.SharedStorage['Counters']['ep'] < self.EP_MAX:
+                # blocking wait until get batch of data
+                self.SharedStorage['Events']['update'].wait()
+                # save the model
                 if UpdateCount % 100 == 0:
                     self.save()
                     hp.ColorPrint(Fore.LIGHTBLUE_EX, "Save for every 100 updates.")
@@ -157,8 +160,6 @@ class PPO(object):
                     hp.ColorPrint(Fore.LIGHTBLUE_EX,
                             "This update does not need to be saved: {}".format(UpdateCount))
                 UpdateCount += 1
-                # wait until get batch of data
-                self.SharedStorage['Events']['update'].wait()
                 # copy pi to old pi
                 self.sess.run(self.update_oldpi_op)
                 # collect data from all workers
