@@ -10,9 +10,9 @@
                "L2Neurons": "the number of neurons in hidden layer 2; 0 for no layer 2"
                       },
   "WorkerParameters": {
-              "EP_MAX"         :5000,
+              "EP_MAX"         :10000,
               "N_WORKER"       :5,
-              "MIN_BATCH_SIZE" :32,
+              "MIN_BATCH_SIZE" :48,
               "GAMMA"          :1.0
                       },
   "RL_Parameters":    {

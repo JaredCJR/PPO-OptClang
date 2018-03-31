@@ -117,7 +117,7 @@ class Worker(object):
                 calc.appendStateRewards(buffer_s, buffer_a, buffer_r, states, rewards, action)
 
                 '''
-                Calculate overall reward for plotting
+                Calculate overall reward for summary
                 '''
                 EpisodeReward = calc.calcEpisodeReward(rewards)
 
@@ -135,6 +135,10 @@ class Worker(object):
                     Convert dict of list into row-array
                     '''
                     vstack_s, vstack_a, vstack_r = calc.DictToVstack(buffer_s, buffer_a, discounted_r)
+                    '''
+                    Remove data that are not important
+                    '''
+                    vstack_s, vstack_a, vstack_r = calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r)
                     '''
                     Split each of vector and assemble into a queue element.
                     '''

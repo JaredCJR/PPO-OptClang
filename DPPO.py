@@ -296,8 +296,11 @@ class PPO(object):
         return self.sess.run(self.v, {self.tfs: s})[0, 0]
 
     def DrawToTf(self, speedup, overall_reward, step):
-        result = self.sess.run(
-                    tf.summary.merge([self.SpeedupSummary, self.EpiRewardSummary]),
-                    feed_dict={self.OverallSpeedup: speedup,
-                               self.EpisodeReward: overall_reward})
-        self.writer.add_summary(result, step)
+        try:
+            result = self.sess.run(
+                        tf.summary.merge([self.SpeedupSummary, self.EpiRewardSummary]),
+                        feed_dict={self.OverallSpeedup: speedup,
+                                   self.EpisodeReward: overall_reward})
+            self.writer.add_summary(result, step)
+        except Exception as e:
+            ColorPrint(Fore.LIGHTRED_EX, "SpeedupSummary or EpiRewardSummary failed: {}".fomat(e))
