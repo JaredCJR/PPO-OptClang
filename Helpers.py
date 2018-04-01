@@ -50,8 +50,6 @@ def InitSharedStorage():
     SharedCounters = {}
     SharedCounters['ep'] = 0
     SharedCounters['update_counter'] = 0
-    SharedCounters['running_reward'] = []
-    SharedCounters['overall_speedup'] = []
     # a global dict to access everything
     SharedStorage = {}
     SharedStorage['Events'] = SharedEvents

@@ -55,12 +55,13 @@ L2Neurons = config['RL_Parameters']['L2Neurons']
 SharedStorage = hp.InitSharedStorage()
 
 class Worker(object):
-    def __init__(self, WorkerID, SharedStorage):
+    def __init__(self, WorkerID, SharedStorage, LogDir):
         global GlobalPPO
         self.wid = WorkerID
         self.env = gym.make(Game).unwrapped
         self.ppo = GlobalPPO
         self.SharedStorage = SharedStorage
+        self.LogDir = LogDir
 
     def work(self):
         while not self.SharedStorage['Coordinator'].should_stop():
@@ -138,7 +139,7 @@ class Worker(object):
                     '''
                     Remove data that are not important
                     '''
-                    vstack_s, vstack_a, vstack_r = calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r)
+                    #vstack_s, vstack_a, vstack_r = calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r)
                     '''
                     Split each of vector and assemble into a queue element.
                     '''
@@ -169,17 +170,13 @@ class Worker(object):
                     PassHistory = {}
                     # record reward changes, plot later
                     self.SharedStorage['Locks']['plot_epi'].acquire()
-                    if len(self.SharedStorage['Counters']['running_reward']) == 0:
-                        self.SharedStorage['Counters']['running_reward'].append(EpisodeReward)
-                    else:
-                        self.SharedStorage['Counters']['running_reward'].append(self.SharedStorage['Counters']['running_reward'][-1]*0.9+EpisodeReward*0.1)
-                    self.SharedStorage['Counters']['ep'] += 1
                     speedup = calc.calcOverallSpeedup(ResetInfo, info)
-                    self.SharedStorage['Counters']['overall_speedup'].append(speedup)
+                    # add episode count
+                    self.SharedStorage['Counters']['ep'] += 1
                     '''
                     draw to tensorboard
                     '''
-                    self.ppo.DrawToTf(speedup, EpisodeReward, len(self.SharedStorage['Counters']['overall_speedup']))
+                    self.ppo.DrawToTf(speedup, EpisodeReward, self.SharedStorage['Counters']['ep'])
                     self.SharedStorage['Locks']['plot_epi'].release()
                     msg = '{0:}/{1:} ({2:.1f}%)'.format(self.SharedStorage['Counters']['ep'], EP_MAX,self.SharedStorage['Counters']['ep']/EP_MAX*100) + ' | WorkerID={}'.format(self.wid) + '\nEpisodeReward: {0:.4f}'.format(EpisodeReward) + ' | OverallSpeedup: {}'.format(speedup)
                     hp.ColorPrint(Fore.GREEN, msg)
@@ -203,6 +200,13 @@ if __name__ == '__main__':
                         help='Is this run will be training procedure?\n\"Y\"=Training, \"N\"=Inference',
                         required=False)
     args = vars(parser.parse_args())
+    # restore the episode count
+    EpiStepFile = args['logdir']+'/EpiStepFile'
+    if os.path.exists(EpiStepFile):
+        with open(EpiStepFile, 'r') as f:
+            SharedStorage['Counters']['ep'] = int(f.read())
+            hp.ColorPrint(Fore.LIGHTCYAN_EX, "Restore Episode:{}".format(SharedStorage['Counters']['ep']))
+
     GlobalPPO = DPPO.PPO(gym.make(Game).unwrapped,
             args['logdir'], 'model.ckpt',
             isTraining=args['training'],
@@ -222,7 +226,7 @@ if __name__ == '__main__':
 
     workers = []
     for i in range(N_WORKER):
-        workers.append(Worker(WorkerID=(i+1), SharedStorage=SharedStorage))
+        workers.append(Worker(WorkerID=(i+1), SharedStorage=SharedStorage, LogDir=args['logdir']))
 
     threads = []
     for worker in workers:
@@ -239,12 +243,3 @@ if __name__ == '__main__':
     except RuntimeError:
         hp.ColorPrint(Fore.RED, "Some of the workers cannot be stopped within 1 sec.\nYou can ignore the messages after this msg.")
 
-    # plot changes of rewards
-    '''
-    plt.plot(np.arange(len(SharedStorage['Counters']['running_reward'])), SharedStorage['Counters']['running_reward'])
-    plt.xlabel('Episode')
-    plt.ylabel('Moving reward')
-    plt.savefig('running_rewards.png')
-    hp.ColorPrint(Fore.RED, 'running_rewards.png is saved.')
-    '''
-    # use tensorboard to see the graphs is better than plt method.

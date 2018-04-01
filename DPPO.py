@@ -58,22 +58,26 @@ class PPO(object):
         self.sess = tf.Session(graph=tf.get_default_graph())
         self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
         self.ckptLocBase = ckptLocBase
+        self.UpdateStepFile = self.ckptLocBase + '/UpdateStep'
         hp.ColorPrint(Fore.LIGHTCYAN_EX, "Log dir={}".format(self.ckptLocBase))
         self.ckptLoc = ckptLocBase + '/' + ckptName
-        self.RecordStep = 0
+        self.UpdateStep = 0
+        if os.path.exists(self.UpdateStepFile):
+            with open(self.UpdateStepFile, 'r') as f:
+                self.UpdateStep = int(f.read())
         if isTraining == 'N':
             self.isTraining = False
             hp.ColorPrint(Fore.LIGHTCYAN_EX, "This is inference procedure")
         else:
             self.isTraining = True
-            hp.ColorPrint(Fore.LIGHTCYAN_EX, "This is training procedure")
+            hp.ColorPrint(Fore.LIGHTCYAN_EX, "This is training procedure with UpdateStep={}".format(self.UpdateStep))
 
         # critic
         with tf.variable_scope('Critic'):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, self.L1Neurons, activation_function=tf.nn.relu, norm=True)
+                l1 = self.add_layer(self.tfs, self.L1Neurons, activation_function=tf.nn.leaky_relu, norm=True)
                 if self.L2Neurons != 0:
-                    l2 = self.add_layer(l1, self.L2Neurons, activation_function=tf.nn.relu, norm=True)
+                    l2 = self.add_layer(l1, self.L2Neurons, activation_function=tf.nn.leaky_relu, norm=True)
             with tf.variable_scope('Value'):
                 if self.L2Neurons != 0:
                     self.v = tf.layers.dense(l2, 1)
@@ -153,9 +157,9 @@ class PPO(object):
                 # blocking wait until get batch of data
                 self.SharedStorage['Events']['update'].wait()
                 # save the model
-                if UpdateCount % 100 == 0:
+                if UpdateCount % 20 == 0:
                     self.save()
-                    hp.ColorPrint(Fore.LIGHTBLUE_EX, "Save for every 100 updates.")
+                    hp.ColorPrint(Fore.LIGHTRED_EX, "Save for every 20 updates.")
                 else:
                     hp.ColorPrint(Fore.LIGHTBLUE_EX,
                             "This update does not need to be saved: {}".format(UpdateCount))
@@ -170,23 +174,19 @@ class PPO(object):
                 # update actor and critic in a update loop
                 for _ in range(self.UpdateDepth):
                     self.sess.run(self.atrain_op, {self.tfs: s, self.tfa: a, self.tfadv: adv})
-                for _ in range(self.UpdateDepth):
                     self.sess.run(self.ctrain_op, {self.tfs: s, self.tfdc_r: r})
                 '''
                 write summary
                 '''
-                # actor loss
+                # actor and critic loss
                 result = self.sess.run(
-                            tf.summary.merge([self.ActorLossSummary]),
-                            feed_dict={self.tfs: s, self.tfa: a, self.tfadv: adv})
-                self.writer.add_summary(result, self.RecordStep)
-                # critic loss
-                result = self.sess.run(
-                            tf.summary.merge([self.CriticLossSummary]),
-                            feed_dict={self.tfs: s, self.tfdc_r: r})
-                self.writer.add_summary(result, self.RecordStep)
-                #self.writer.flush()
-                self.RecordStep += 1
+                            tf.summary.merge([self.ActorLossSummary, self.CriticLossSummary]),
+                            feed_dict={self.tfs: s, self.tfa: a, self.tfadv: adv, self.tfdc_r: r})
+                self.writer.add_summary(result, self.UpdateStep)
+                self.UpdateStep += 1
+                # re-train will not overlap the summaries
+                with open(self.UpdateStepFile, 'w') as f:
+                    f.write(str(self.UpdateStep))
 
                 # updating finished
                 self.SharedStorage['Events']['update'].clear()
@@ -224,9 +224,9 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, self.L1Neurons, trainable,activation_function=tf.nn.relu, norm=True)
+                l1 = self.add_layer(self.tfs, self.L1Neurons, trainable,activation_function=tf.nn.leaky_relu, norm=True)
                 if self.L2Neurons != 0:
-                    l2 = self.add_layer(l1, self.L2Neurons, trainable,activation_function=tf.nn.relu, norm=True)
+                    l2 = self.add_layer(l1, self.L2Neurons, trainable,activation_function=tf.nn.leaky_relu, norm=True)
             with tf.variable_scope('Action_Probs'):
                 if self.L2Neurons != 0:
                     probs = self.add_layer(l2, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
@@ -296,11 +296,17 @@ class PPO(object):
         return self.sess.run(self.v, {self.tfs: s})[0, 0]
 
     def DrawToTf(self, speedup, overall_reward, step):
+        """
+        This is not thread-safe
+        """
         try:
             result = self.sess.run(
                         tf.summary.merge([self.SpeedupSummary, self.EpiRewardSummary]),
                         feed_dict={self.OverallSpeedup: speedup,
                                    self.EpisodeReward: overall_reward})
             self.writer.add_summary(result, step)
+            with open(self.ckptLocBase + '/EpiStepFile', 'w') as f:
+                f.write(str(step))
+            self.writer.flush()
         except Exception as e:
             ColorPrint(Fore.LIGHTRED_EX, "SpeedupSummary or EpiRewardSummary failed: {}".fomat(e))
