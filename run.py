@@ -105,6 +105,12 @@ class Worker(object):
                     hp.ColorPrint(Fore.RED, 'WorkerID={} env.step() Failed. Use new target and forget these memories'.format(self.wid))
                     break
                 '''
+                Calculate actual rewards for all functions
+                '''
+                rewards, oldAllUsage = calc.calcEachReward(info,
+                        MeanSigmaDict, nextStates, oldInfo,
+                        oldCycles, isUsageNotProcessed)
+                '''
                 Speedup for tf.summary
                 Skip this iteration, if the speedup/slowdown is not obvious
                 '''
@@ -117,13 +123,6 @@ class Worker(object):
                     else:
                         states = nextStates
                         continue
-                '''
-                Calculate actual rewards for all functions
-                '''
-                rewards, oldAllUsage = calc.calcEachReward(info,
-                        MeanSigmaDict, nextStates, oldInfo,
-                        oldCycles, isUsageNotProcessed)
-
                 '''
                 Match the states and rewards
                 '''
