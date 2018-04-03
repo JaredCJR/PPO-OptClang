@@ -104,7 +104,19 @@ class Worker(object):
                     PassHistory = {}
                     hp.ColorPrint(Fore.RED, 'WorkerID={} env.step() Failed. Use new target and forget these memories'.format(self.wid))
                     break
-
+                '''
+                Speedup for tf.summary
+                Skip this iteration, if the speedup/slowdown is not obvious
+                '''
+                speedup = calc.calcOverallSpeedup(ResetInfo, info)
+                if abs(speedup) < 0.01:
+                    hp.ColorPrint(Fore.RED,
+                            "WorkerID={}, Speedup={} --> skip this iteration".format(self.wid, speedup))
+                    if done:
+                        break
+                    else:
+                        states = nextStates
+                        continue
                 '''
                 Calculate actual rewards for all functions
                 '''
@@ -170,7 +182,6 @@ class Worker(object):
                     PassHistory = {}
                     # record reward changes, plot later
                     self.SharedStorage['Locks']['plot_epi'].acquire()
-                    speedup = calc.calcOverallSpeedup(ResetInfo, info)
                     # add episode count
                     self.SharedStorage['Counters']['ep'] += 1
                     '''

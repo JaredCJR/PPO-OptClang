@@ -466,11 +466,11 @@ class EnvCalculator(object):
         return the overall speedup(formatted float):
         >0: speedup
         <0: slow down
-        ex. 0.032
+        ex. 0.0324
         """
         old = ResetInfo["TotalCyclesStat"]
         new = Info["TotalCyclesStat"]
         speedup = (old-new)/old
-        formatted = "%.3f" % speedup
+        formatted = "%.4f" % speedup
         return float(formatted)
 
