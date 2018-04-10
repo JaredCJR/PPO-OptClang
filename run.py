@@ -81,15 +81,19 @@ class Worker(object):
                 '''
                 Save the last profiled info to calculate real rewards
                 '''
-                if FirstEpi:
-                    oldCycles = ResetInfo["TotalCyclesStat"]
-                    oldInfo = ResetInfo
-                    FirstEpi = False
-                    isUsageNotProcessed = True
-                else:
-                    oldCycles = info["TotalCyclesStat"]
-                    oldInfo = oldAllUsage
-                    isUsageNotProcessed = False
+                try:
+                    if FirstEpi:
+                        oldCycles = ResetInfo["TotalCyclesStat"]
+                        oldInfo = ResetInfo
+                        FirstEpi = False
+                        isUsageNotProcessed = True
+                    else:
+                        oldCycles = info["TotalCyclesStat"]
+                        oldInfo = oldAllUsage
+                        isUsageNotProcessed = False
+                except Exception as e:
+                    hp.ColorPrint(Fore.RED, "Exception happened and skipped: \n{}".format(e))
+                    break
                 '''
                 Choose the features from the most inflential function
                 '''
@@ -119,6 +123,7 @@ class Worker(object):
                     hp.ColorPrint(Fore.RED,
                             "WorkerID={}, Speedup={} --> skip this iteration".format(self.wid, speedup))
                     if done:
+                        # This may lose some data for training.
                         break
                     else:
                         states = nextStates
