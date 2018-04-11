@@ -94,6 +94,9 @@ class Worker(object):
                 except Exception as e:
                     hp.ColorPrint(Fore.RED, "Exception happened and skipped: \n{}".format(e))
                     break
+                if type(oldCycles) is not int:
+                    hp.ColorPrint(Fore.RED, "oldCycles is not int. skip this episode.")
+                    break
                 '''
                 Choose the features from the most inflential function
                 '''
