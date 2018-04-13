@@ -328,10 +328,11 @@ class EnvCalculator(object):
 
     def appendStateRewards(buffer_s, buffer_a, buffer_r, states, rewards, action):
         """
-        No return value, they are append inplace in buffer_x
+        Buffers are append inplace in buffer_x
         buffer_s : dict of np.array as features
         buffer_a : dict of list of actions(int)
         buffer_r : dict of rewards(float)
+        Return value: the number of valid data
         """
         tmpStates = states.copy()
         for name, featureList in tmpStates.items():
@@ -341,6 +342,7 @@ class EnvCalculator(object):
                 states.pop(target, None)
                 if rewards.get(target) is not None:
                     rewards.pop(target, None)
+        Count = 0
         for name, featureList in states.items():
             if buffer_s.get(name) is None:
                 buffer_s[name] = []
@@ -355,6 +357,8 @@ class EnvCalculator(object):
                 buffer_s[name].append(np.asarray(featureList, dtype=np.float32))
                 buffer_a[name].append(action)
                 buffer_r[name].append(rewards[name])
+                Count += 1
+        return Count
 
     def calcDiscountedRewards(buffer_r, nextObs, ppo):
         """
@@ -437,7 +441,7 @@ class EnvCalculator(object):
         """
         Too many not important data, we need to remove some.
         Input: np.array * 3
-        Return: np.array * 3
+        Return: np.array * 3 and [how many data do you removed]
         """
         # goal: remove the reward data smaller than 20 percentile(abs)
         orig_s = vstack_s
@@ -447,9 +451,11 @@ class EnvCalculator(object):
         r_threshold = np.percentile(abs_r, 20)
         rmIndices = []
         idx = 0
+        delCount = 0
         for index, value in np.ndenumerate(abs_r):
             if value < r_threshold:
                 rmIndices.append(idx)
+                delCount += 1
             idx += 1
         vstack_s = np.delete(vstack_s, rmIndices, 0)
         vstack_a = np.delete(vstack_a, rmIndices, 0)
@@ -459,7 +465,7 @@ class EnvCalculator(object):
             vstack_s = orig_s
             vstack_a = orig_a
             vstack_r = orig_r
-        return vstack_s, vstack_a, vstack_r
+        return vstack_s, vstack_a, vstack_r, delCount
 
     def calcOverallSpeedup(ResetInfo, Info):
         """

@@ -122,11 +122,12 @@ class Worker(object):
                 Skip this iteration, if the speedup/slowdown is not obvious
                 '''
                 speedup = calc.calcOverallSpeedup(ResetInfo, info)
-                if abs(speedup) < 0.01:
+                if abs(speedup) < 0.005:
                     hp.ColorPrint(Fore.RED,
                             "WorkerID={}, Speedup={} --> skip this iteration".format(self.wid, speedup))
                     if done:
                         # This may lose some data for training.
+                        PassHistory = {}
                         break
                     else:
                         states = nextStates
@@ -134,7 +135,8 @@ class Worker(object):
                 '''
                 Match the states and rewards
                 '''
-                calc.appendStateRewards(buffer_s, buffer_a, buffer_r, states, rewards, action)
+                AddedCount = calc.appendStateRewards(
+                        buffer_s, buffer_a, buffer_r, states, rewards, action)
 
                 '''
                 Calculate overall reward for summary
@@ -144,7 +146,7 @@ class Worker(object):
                 # add the generated results
                 self.SharedStorage['Locks']['counter'].acquire()
                 self.SharedStorage['Counters']['update_counter'] = \
-                    self.SharedStorage['Counters']['update_counter'] + len(nextStates.keys())
+                    self.SharedStorage['Counters']['update_counter'] + AddedCount
                 self.SharedStorage['Locks']['counter'].release()
                 if self.SharedStorage['Counters']['update_counter'] >= MIN_BATCH_SIZE or done:
                     '''
@@ -156,9 +158,15 @@ class Worker(object):
                     '''
                     vstack_s, vstack_a, vstack_r = calc.DictToVstack(buffer_s, buffer_a, discounted_r)
                     '''
-                    Remove data that are not important
+                    Remove data that are not important in the batch
                     '''
-                    #vstack_s, vstack_a, vstack_r = calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r)
+                    '''
+                    vstack_s, vstack_a, vstack_r, delCount = calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r)
+                    self.SharedStorage['Locks']['counter'].acquire()
+                    self.SharedStorage['Counters']['update_counter'] = \
+                        self.SharedStorage['Counters']['update_counter'] - delCount
+                    self.SharedStorage['Locks']['counter'].release()
+                    '''
                     '''
                     Split each of vector and assemble into a queue element.
                     '''
@@ -170,11 +178,10 @@ class Worker(object):
                     self.SharedStorage['Locks']['queue'].release()
                     buffer_s, buffer_a, buffer_r = {}, {}, {}
 
-                    if self.SharedStorage['Counters']['update_counter'] >= MIN_BATCH_SIZE:
-                        # stop collecting data
-                        self.SharedStorage['Events']['collect'].clear()
-                        # globalPPO update
-                        self.SharedStorage['Events']['update'].set()
+                    # stop collecting data
+                    self.SharedStorage['Events']['collect'].clear()
+                    # globalPPO update
+                    self.SharedStorage['Events']['update'].set()
 
                     if self.SharedStorage['Counters']['ep'] >= EP_MAX:
                         # stop training
