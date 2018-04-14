@@ -111,20 +111,41 @@ class Worker(object):
                     PassHistory = {}
                     hp.ColorPrint(Fore.RED, 'WorkerID={} env.step() Failed. Use new target and forget these memories'.format(self.wid))
                     break
-                '''
-                Calculate actual rewards for all functions
-                '''
-                rewards, oldAllUsage = calc.calcEachReward(info,
-                        MeanSigmaDict, nextStates, oldInfo,
-                        oldCycles, isUsageNotProcessed)
-                '''
-                Speedup for tf.summary
-                Skip this iteration, if the speedup/slowdown is not obvious
-                '''
-                speedup = calc.calcOverallSpeedup(ResetInfo, info)
-                if abs(speedup) < 0.005:
-                    hp.ColorPrint(Fore.RED,
-                            "WorkerID={}, Speedup={} --> skip this iteration".format(self.wid, speedup))
+                try:
+                    '''
+                    Calculate actual rewards for all functions
+                    Note: The info may loss some part, re-send or abort this iteration.
+                    '''
+                    rewards, oldAllUsage = calc.calcEachReward(info,
+                            MeanSigmaDict, nextStates, oldInfo,
+                            oldCycles, isUsageNotProcessed)
+                    '''
+                    Speedup for tf.summary
+                    Skip this iteration, if the speedup/slowdown is not obvious
+                    '''
+                    speedup = calc.calcOverallSpeedup(ResetInfo, info)
+                    if abs(speedup) < 0.005:
+                        hp.ColorPrint(Fore.RED,
+                                "WorkerID={}, Speedup={} --> skip this iteration".format(self.wid, speedup))
+                        if done:
+                            PassHistory = {}
+                            break
+                        else:
+                            states = nextStates
+                            continue
+                    '''
+                    Match the states and rewards
+                    '''
+                    AddedCount = calc.appendStateRewards(
+                            buffer_s, buffer_a, buffer_r, states, rewards, action)
+
+                    '''
+                    Calculate overall reward for summary
+                    '''
+                    EpisodeReward = calc.calcEpisodeReward(rewards)
+                except Exception as e:
+                    hp.ColorPrint(Fore.LIGHTRED_EX,
+                            "Exception for receiving uncompleted data\n{}".format(e))
                     if done:
                         # This may lose some data for training.
                         PassHistory = {}
@@ -132,16 +153,6 @@ class Worker(object):
                     else:
                         states = nextStates
                         continue
-                '''
-                Match the states and rewards
-                '''
-                AddedCount = calc.appendStateRewards(
-                        buffer_s, buffer_a, buffer_r, states, rewards, action)
-
-                '''
-                Calculate overall reward for summary
-                '''
-                EpisodeReward = calc.calcEpisodeReward(rewards)
 
                 # add the generated results
                 self.SharedStorage['Locks']['counter'].acquire()
