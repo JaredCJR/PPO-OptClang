@@ -465,6 +465,7 @@ class EnvCalculator(object):
             vstack_s = orig_s
             vstack_a = orig_a
             vstack_r = orig_r
+            delCount = 0
         return vstack_s, vstack_a, vstack_r, delCount
 
     def calcOverallSpeedup(ResetInfo, Info):

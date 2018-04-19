@@ -174,6 +174,7 @@ class Worker(object):
                     '''
                     vstack_s, vstack_a, vstack_r, delCount = \
                             calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r, AbandonRatio=20)
+                    hp.ColorPrint(Fore.GREEN, "Throw away {} data in this batch".format(delCount))
                     self.SharedStorage['Locks']['counter'].acquire()
                     self.SharedStorage['Counters']['update_counter'] = \
                         self.SharedStorage['Counters']['update_counter'] - delCount
