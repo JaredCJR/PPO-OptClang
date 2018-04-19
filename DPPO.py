@@ -96,7 +96,7 @@ class PPO(object):
         oldpi, oldpi_params = self._build_anet('oldActor', trainable=False)
         # operation of choosing action
         with tf.variable_scope('ActionsProb'):
-            self.acts_prob = tf.squeeze(pi, axis=0)
+            self.acts_expect = tf.squeeze(pi, axis=0)
         with tf.variable_scope('Update'):
             self.update_oldpi_op = [oldp.assign(p) for p, oldp in zip(pi_params, oldpi_params)]
 
@@ -104,19 +104,22 @@ class PPO(object):
             self.tfa = tf.placeholder(tf.int32, [None, 1], 'action')
             self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
             # probabilities of actions which agent took with policy
+            # depth=pi.shape[0] <-- each column is viewed as a vector
+            # depth=pi.shape[1] <-- each row is viewed as a vector <-- we use this
             act_probs = pi * tf.one_hot(indices=self.tfa, depth=pi.shape[1])
             act_probs = tf.reduce_sum(act_probs, axis=1)
             # probabilities of actions which old agent took with policy
             act_probs_old = oldpi * tf.one_hot(indices=self.tfa, depth=oldpi.shape[1])
             act_probs_old = tf.reduce_sum(act_probs_old, axis=1)
             # add a small number to avoid NaN
-            ratio = tf.divide(act_probs, act_probs_old+1e-7)
-            #ratio = tf.exp(tf.log(act_probs) - tf.log(act_probs_old)) # this may lead loss to NaN
+            ratio = tf.divide(act_probs, act_probs_old + +1e-10)
+            #ratio = tf.exp(tf.log(act_probs) - tf.log(act_probs_old))
             surr = tf.multiply(ratio, self.tfadv)
             clip = tf.clip_by_value(ratio, 1.-self.ClippingEpsilon, 1.+self.ClippingEpsilon)*self.tfadv
             # clipped surrogate objective
             self.aloss = -tf.reduce_mean(tf.minimum(surr, clip))
             # visualizing
+            self.ppoRatioSummary = tf.summary.tensor_summary('ppoRatio', ratio)
             self.ActorLossSummary = tf.summary.scalar('ActorLoss', self.aloss)
 
         with tf.variable_scope('ActorTrain'):
@@ -180,7 +183,8 @@ class PPO(object):
                 '''
                 # actor and critic loss
                 result = self.sess.run(
-                            tf.summary.merge([self.ActorLossSummary, self.CriticLossSummary]),
+                            tf.summary.merge([self.ActorLossSummary, self.CriticLossSummary, 
+                                self.ppoRatioSummary]),
                             feed_dict={self.tfs: s, self.tfa: a, self.tfadv: adv, self.tfdc_r: r})
                 self.writer.add_summary(result, self.UpdateStep)
                 self.UpdateStep += 1
@@ -227,13 +231,16 @@ class PPO(object):
                 l1 = self.add_layer(self.tfs, self.L1Neurons, trainable,activation_function=tf.nn.leaky_relu, norm=True)
                 if self.L2Neurons != 0:
                     l2 = self.add_layer(l1, self.L2Neurons, trainable,activation_function=tf.nn.leaky_relu, norm=True)
-            with tf.variable_scope('Action_Probs'):
+            with tf.variable_scope('Action_Expectation'):
+                # softmax may lead to NaN
                 if self.L2Neurons != 0:
-                    probs = self.add_layer(l2, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
+                    expectation = \
+                            self.add_layer(l2, self.A_DIM, activation_function=tf.nn.leaky_relu, norm=True)
                 else:
-                    probs = self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
+                    expectation = \
+                            self.add_layer(l1, self.A_DIM, activation_function=tf.nn.leaky_relu, norm=True)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
-        return probs, params
+        return expectation, params
 
     def choose_action(self, s, PassHistory):
         """
@@ -242,18 +249,18 @@ class PPO(object):
         In the world of reinforcement learning, the action space is from 0 to 33.
         However, in the world of modified-clang, the accepted passes are from 1 to 34.
         Therefore, "gym-OptClang" already done this effort for us.
-        We don't have to bother this by ourselves.
+        We don't have to be bothered by this.
         However, if you use the model withou gym-OptClang, you have to convert by yourself.
         e.g. Inference example in our examples.
         """
         s = s[np.newaxis, :]
-        a_probs = self.sess.run(self.acts_prob, {self.tfs: s})
-        #print(a_probs)
+        a_expect = self.sess.run(self.acts_expect, {self.tfs: s})
+        print(a_expect)
         '''
         choose the one that was not applied yet
         '''
         # split the probabilities into list of [index ,probablities]
-        aList = a_probs.tolist()
+        aList = a_expect.tolist()
         probList = []
         idx = 0
         for prob in aList:
@@ -274,13 +281,13 @@ class PPO(object):
             # Use different strategies for different situations
             if self.isTraining == True:
                 prob = random.uniform(0, 1)
-                if prob < 0.9:
+                if prob < 0.8:
                     # the most possible action
                     PassIdx = probList[idx][0]
                     idx += 1
                 else:
-                    # random action based on the prediction
-                    PassIdx = np.random.choice(np.arange(self.A_DIM), p=a_probs.ravel())
+                    # random action
+                    PassIdx = np.random.choice(np.arange(self.A_DIM))
             else:
                 PassIdx = probList[idx][0]
                 idx += 1

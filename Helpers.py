@@ -437,7 +437,7 @@ class EnvCalculator(object):
             list_r.extend(buffer_r[name])
         return np.vstack(list_s), np.vstack(list_a), np.vstack(list_r)
 
-    def RemoveTrivialData(vstack_s, vstack_a, vstack_r):
+    def RemoveTrivialData(vstack_s, vstack_a, vstack_r, AbandonRatio=0):
         """
         Too many not important data, we need to remove some.
         Input: np.array * 3
@@ -448,7 +448,7 @@ class EnvCalculator(object):
         orig_a = vstack_a
         orig_r = vstack_r
         abs_r = np.fabs(vstack_r)
-        r_threshold = np.percentile(abs_r, 20)
+        r_threshold = np.percentile(abs_r, AbandonRatio)
         rmIndices = []
         idx = 0
         delCount = 0

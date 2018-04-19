@@ -124,7 +124,8 @@ class Worker(object):
                     Skip this iteration, if the speedup/slowdown is not obvious
                     '''
                     speedup = calc.calcOverallSpeedup(ResetInfo, info)
-                    if abs(speedup) < 0.005:
+                    if abs(speedup) < 0.0:
+                        # This result in bad evaluation.
                         hp.ColorPrint(Fore.RED,
                                 "WorkerID={}, Speedup={} --> skip this iteration".format(self.wid, speedup))
                         if done:
@@ -171,13 +172,12 @@ class Worker(object):
                     '''
                     Remove data that are not important in the batch
                     '''
-                    '''
-                    vstack_s, vstack_a, vstack_r, delCount = calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r)
+                    vstack_s, vstack_a, vstack_r, delCount = \
+                            calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r, AbandonRatio=20)
                     self.SharedStorage['Locks']['counter'].acquire()
                     self.SharedStorage['Counters']['update_counter'] = \
                         self.SharedStorage['Counters']['update_counter'] - delCount
                     self.SharedStorage['Locks']['counter'].release()
-                    '''
                     '''
                     Split each of vector and assemble into a queue element.
                     '''
