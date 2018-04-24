@@ -95,7 +95,7 @@ class PPO(object):
         pi, pi_params = self._build_anet('Actor', trainable=True)
         oldpi, oldpi_params = self._build_anet('oldActor', trainable=False)
         # operation of choosing action
-        with tf.variable_scope('ActionsProb'):
+        with tf.variable_scope('ActionsExp.'):
             self.acts_expect = tf.squeeze(pi, axis=0)
         with tf.variable_scope('Update'):
             self.update_oldpi_op = [oldp.assign(p) for p, oldp in zip(pi_params, oldpi_params)]
