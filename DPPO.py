@@ -141,7 +141,8 @@ class PPO(object):
         If the ckpt exist, restore it.
         '''
         if tf.train.checkpoint_exists(self.ckptLoc):
-            self.saver.restore(self.sess, self.ckptLoc)
+            #self.saver.restore(self.sess, self.ckptLoc)
+            self.saver.restore(self.sess, tf.train.latest_checkpoint(self.ckptLocBase))
             hp.ColorPrint(Fore.LIGHTGREEN_EX, 'Restore the previous model.')
         elif self.isTraining == False:
             hp.ColorPrint(Fore.LIGHTRED_EX, "Missing trained model to inference, exit.")
