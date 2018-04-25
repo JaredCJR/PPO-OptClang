@@ -22,13 +22,10 @@ Inference
 ---------------------------------------
 Refer to [ThesisTools](https://github.com/JaredCJR/ThesisTools#how-to-use-the-trained-model-to-inference)
 
-Test trained policy
-----------------------------------------
-`python3 test_policy.py`
-
 Tensorboard
 ----------------------------------------
-`tensorboard --logdir log`
+* You can use `ssh-tunnel` to forward specific port in web browser to access remote tensorboard.
+`tensorboard --logdir [logdir]`
 
 License
 ----------------------------------------
