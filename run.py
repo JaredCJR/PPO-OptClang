@@ -46,6 +46,8 @@ A_LR = config['RL_Parameters']['A_LR']
 C_LR = config['RL_Parameters']['C_LR']
 # learning rate decaying for A_LR and C_LR
 LR_DECAY = config['RL_Parameters']['LR_DECAY']
+# learning rate decay frequency
+LR_DECAY_FREQ = config['RL_Parameters']['LR_DECAY_FREQ']
 # learn multiple times. Because of the PPO will constrain the update speed.
 UpdateDepth = config['RL_Parameters']['UpdateDepth']
 # number of L1 neurons
@@ -255,6 +257,7 @@ if __name__ == '__main__':
             A_LR=A_LR,
             C_LR=C_LR,
             LR_DECAY=LR_DECAY,
+            LR_DECAY_FREQ=LR_DECAY_FREQ,
             ClippingEpsilon=ClippingEpsilon,
             L1Neurons=L1Neurons,
             L2Neurons=L2Neurons,

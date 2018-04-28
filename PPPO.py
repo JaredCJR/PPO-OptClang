@@ -37,7 +37,7 @@ import pytz
 import Helpers as hp
 
 class PPO(object):
-    def __init__(self, env, ckptLocBase, ckptName, isTraining, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth, L1Neurons, L2Neurons, LR_DECAY=1, SharedStorage=None):
+    def __init__(self, env, ckptLocBase, ckptName, isTraining, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth, L1Neurons, L2Neurons, LR_DECAY=1, LR_DECAY_FREQ=1000,SharedStorage=None):
         tf.reset_default_graph()
         # if SharedStorage is None, it must be in inference mode without "update()"
         self.SharedStorage = SharedStorage
@@ -46,6 +46,7 @@ class PPO(object):
         self.A_LR = A_LR
         self.C_LR = C_LR
         self.LR_DECAY = LR_DECAY
+        self.LR_DECAY_FREQ = LR_DECAY_FREQ
         self.ClippingEpsilon = ClippingEpsilon
         self.UpdateDepth = UpdateDepth
         self.L1Neurons = L1Neurons
@@ -185,7 +186,7 @@ class PPO(object):
                     hp.ColorPrint(Fore.LIGHTBLUE_EX,
                             "This update does not need to be saved: {}".format(self.UpdateStep))
                 # learning rate decay
-                if self.UpdateStep % 2000 == 1999:
+                if self.UpdateStep % self.LR_DECAY_FREQ == (self.LR_DECAY_FREQ-1):
                     # decay
                     self.A_LR = self.A_LR * self.LR_DECAY
                     self.C_LR = self.C_LR * self.LR_DECAY
