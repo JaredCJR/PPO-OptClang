@@ -80,8 +80,6 @@ class Worker(object):
                 if not self.SharedStorage['Events']['collect'].is_set():
                     # wait until PPO is updated
                     self.SharedStorage['Events']['collect'].wait()
-                    # clear history buffer, use new policy to collect data
-                    buffer_s, buffer_a, buffer_r = {}, {}, {}
                 '''
                 Save the last profiled info to calculate real rewards
                 '''
