@@ -62,18 +62,27 @@ class PPO(object):
         hp.ColorPrint(Fore.LIGHTCYAN_EX, "Log dir={}".format(self.ckptLocBase))
         self.ckptLoc = ckptLocBase + '/' + ckptName
         self.UpdateStep = 0
+        if not os.path.exists(self.ckptLocBase):
+            os.makedirs(self.ckptLocBase)
         if os.path.exists(self.UpdateStepFile):
             with open(self.UpdateStepFile, 'r') as f:
                 self.UpdateStep = int(f.read())
             hp.ColorPrint(Fore.GREEN, "Restored episode step={}".format(self.UpdateStep))
         if os.path.exists(self.ActorLrFile):
             with open(self.ActorLrFile, 'r') as f:
-                self.A_LR = int(f.read())
+                self.A_LR = float(f.read())
             hp.ColorPrint(Fore.GREEN, "Restored A_LR={}".format(self.A_LR))
+        else:
+            with open(self.ActorLrFile, 'w') as f:
+                f.write(str(self.A_LR))
         if os.path.exists(self.CriticLrFile):
             with open(self.CriticLrFile, 'r') as f:
-                self.C_LR = int(f.read())
+                self.C_LR = float(f.read())
             hp.ColorPrint(Fore.GREEN, "Restored C_LR={}".format(self.C_LR))
+        else:
+            with open(self.CriticLrFile, 'w') as f:
+                f.write(str(self.C_LR))
+
         if isTraining == 'N':
             self.isTraining = False
             hp.ColorPrint(Fore.LIGHTCYAN_EX, "This is inference procedure")
@@ -121,8 +130,8 @@ class PPO(object):
             act_probs_old = oldpi * tf.one_hot(indices=self.tfa, depth=oldpi.shape[1])
             act_probs_old = tf.reduce_sum(act_probs_old, axis=1)
             # add a small number to avoid NaN
-            ratio = tf.divide(act_probs + 1e-10, act_probs_old + 1e-10)
-            #ratio = tf.exp(tf.log(act_probs) - tf.log(act_probs_old))
+            #ratio = tf.divide(act_probs + 1e-10, act_probs_old + 1e-10)
+            ratio = tf.exp(tf.log(act_probs + 1e-10) - tf.log(act_probs_old + 1e-10))
             surr = tf.multiply(ratio, self.tfadv)
             clip = tf.clip_by_value(ratio, 1.-self.ClippingEpsilon, 1.+self.ClippingEpsilon)*self.tfadv
             # clipped surrogate objective
