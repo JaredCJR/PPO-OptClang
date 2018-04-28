@@ -44,6 +44,8 @@ ClippingEpsilon = config['RL_Parameters']['ClippingEpsilon']
 A_LR = config['RL_Parameters']['A_LR']
 # learning rate for critic
 C_LR = config['RL_Parameters']['C_LR']
+# learning rate decaying for A_LR and C_LR
+LR_DECAY = config['RL_Parameters']['LR_DECAY']
 # learn multiple times. Because of the PPO will constrain the update speed.
 UpdateDepth = config['RL_Parameters']['UpdateDepth']
 # number of L1 neurons
@@ -252,6 +254,7 @@ if __name__ == '__main__':
             GAMMA=GAMMA,
             A_LR=A_LR,
             C_LR=C_LR,
+            LR_DECAY=LR_DECAY,
             ClippingEpsilon=ClippingEpsilon,
             L1Neurons=L1Neurons,
             L2Neurons=L2Neurons,

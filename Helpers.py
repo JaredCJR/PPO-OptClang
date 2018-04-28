@@ -305,7 +305,7 @@ class EnvCalculator(object):
                 '''
                 UseOverallPerf = False
                 #Alpha = Alpha*(Beta*(1 / UsageProfiledRatio)) * 2 # more important
-                Alpha = Alpha*Beta*4 # more important
+                Alpha = Alpha*Beta*5 # more important
                 #print("UsageProfiledRatio={}".format(UsageProfiledRatio))
             if UseOverallPerf:
                 '''
@@ -393,7 +393,6 @@ class EnvCalculator(object):
         for name, reward in rewards.items():
             total += reward
             count += 1.0
-        #return total / count
         return total
 
 

@@ -40,7 +40,7 @@ import pytz
 import Helpers as hp
 
 class PPO(object):
-    def __init__(self, env, ckptLocBase, ckptName, isTraining, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth, L1Neurons, L2Neurons, SharedStorage=None):
+    def __init__(self, env, ckptLocBase, ckptName, isTraining, EP_MAX, GAMMA, A_LR, C_LR, ClippingEpsilon, UpdateDepth, L1Neurons, L2Neurons, LR_DECAY=1, SharedStorage=None):
         tf.reset_default_graph()
         # if SharedStorage is None, it must be in inference mode without "update()"
         self.SharedStorage = SharedStorage
@@ -48,6 +48,7 @@ class PPO(object):
         self.GAMMA = GAMMA
         self.A_LR = A_LR
         self.C_LR = C_LR
+        self.LR_DECAY = LR_DECAY
         self.ClippingEpsilon = ClippingEpsilon
         self.UpdateDepth = UpdateDepth
         self.L1Neurons = L1Neurons
@@ -59,12 +60,23 @@ class PPO(object):
         self.tfs = tf.placeholder(tf.float32, [None, self.S_DIM], 'state')
         self.ckptLocBase = ckptLocBase
         self.UpdateStepFile = self.ckptLocBase + '/UpdateStep'
+        self.ActorLrFile = self.ckptLocBase + '/ActorLrFile'
+        self.CriticLrFile = self.ckptLocBase + '/CrticLrFile'
         hp.ColorPrint(Fore.LIGHTCYAN_EX, "Log dir={}".format(self.ckptLocBase))
         self.ckptLoc = ckptLocBase + '/' + ckptName
         self.UpdateStep = 0
         if os.path.exists(self.UpdateStepFile):
             with open(self.UpdateStepFile, 'r') as f:
                 self.UpdateStep = int(f.read())
+            hp.ColorPrint(Fore.GREEN, "Restored episode step={}".format(self.UpdateStep))
+        if os.path.exists(self.ActorLrFile):
+            with open(self.ActorLrFile, 'r') as f:
+                self.A_LR = int(f.read())
+            hp.ColorPrint(Fore.GREEN, "Restored A_LR={}".format(self.A_LR))
+        if os.path.exists(self.CriticLrFile):
+            with open(self.CriticLrFile, 'r') as f:
+                self.C_LR = int(f.read())
+            hp.ColorPrint(Fore.GREEN, "Restored C_LR={}".format(self.C_LR))
         if isTraining == 'N':
             self.isTraining = False
             hp.ColorPrint(Fore.LIGHTCYAN_EX, "This is inference procedure")
@@ -75,9 +87,9 @@ class PPO(object):
         # critic
         with tf.variable_scope('Critic'):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, self.L1Neurons, activation_function=tf.nn.leaky_relu, norm=True)
+                l1 = self.add_layer(self.tfs, self.L1Neurons, activation_function=tf.nn.relu, norm=True)
                 if self.L2Neurons != 0:
-                    l2 = self.add_layer(l1, self.L2Neurons, activation_function=tf.nn.leaky_relu, norm=True)
+                    l2 = self.add_layer(l1, self.L2Neurons, activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Value'):
                 if self.L2Neurons != 0:
                     self.v = tf.layers.dense(l2, 1)
@@ -112,7 +124,7 @@ class PPO(object):
             act_probs_old = oldpi * tf.one_hot(indices=self.tfa, depth=oldpi.shape[1])
             act_probs_old = tf.reduce_sum(act_probs_old, axis=1)
             # add a small number to avoid NaN
-            ratio = tf.divide(act_probs, act_probs_old + +1e-10)
+            ratio = tf.divide(act_probs + 1e-10, act_probs_old + 1e-10)
             #ratio = tf.exp(tf.log(act_probs) - tf.log(act_probs_old))
             surr = tf.multiply(ratio, self.tfadv)
             clip = tf.clip_by_value(ratio, 1.-self.ClippingEpsilon, 1.+self.ClippingEpsilon)*self.tfadv
@@ -155,19 +167,29 @@ class PPO(object):
         self.saver.save(self.sess, self.ckptLoc)
 
     def update(self):
-        UpdateCount = 0
         while not self.SharedStorage['Coordinator'].should_stop():
             if self.SharedStorage['Counters']['ep'] < self.EP_MAX:
                 # blocking wait until get batch of data
                 self.SharedStorage['Events']['update'].wait()
                 # save the model
-                if UpdateCount % 20 == 0:
+                if self.UpdateStep % 50 == 0:
                     self.save()
-                    hp.ColorPrint(Fore.LIGHTRED_EX, "Save for every 20 updates.")
+                    hp.ColorPrint(Fore.LIGHTRED_EX, "Save for every 50 updates.")
                 else:
                     hp.ColorPrint(Fore.LIGHTBLUE_EX,
-                            "This update does not need to be saved: {}".format(UpdateCount))
-                UpdateCount += 1
+                            "This update does not need to be saved: {}".format(self.UpdateStep))
+                # learning rate decay
+                if self.UpdateStep % 2000 == 1999:
+                    # decay
+                    self.A_LR = self.A_LR * self.LR_DECAY
+                    self.C_LR = self.C_LR * self.LR_DECAY
+                    # save
+                    with open(self.ActorLrFile, 'w') as f:
+                        f.write(str(self.A_LR))
+                    with open(self.CriticLrFile, 'w') as f:
+                        f.write(str(self.C_LR))
+                    hp.ColorPrint(Fore.LIGHTRED_EX,
+                            "Decay LR: A_LR={}, C_LR={}".format(self.A_LR, self.C_LR))
                 # copy pi to old pi
                 self.sess.run(self.update_oldpi_op)
                 # collect data from all workers
@@ -205,7 +227,7 @@ class PPO(object):
 
     def add_layer(self, inputs, out_size, trainable=True,activation_function=None, norm=False):
         in_size = inputs.get_shape().as_list()[1]
-        Weights = tf.Variable(tf.random_normal([in_size, out_size], mean=0., stddev=1.), trainable=trainable)
+        Weights = tf.Variable(tf.random_normal([in_size, out_size], mean=1.0, stddev=1.0), trainable=trainable)
         biases = tf.Variable(tf.zeros([1, out_size]) + 0.1, trainable=trainable)
 
         # fully connected product
@@ -229,17 +251,17 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             with tf.variable_scope('Fully_Connected'):
-                l1 = self.add_layer(self.tfs, self.L1Neurons, trainable,activation_function=tf.nn.leaky_relu, norm=True)
+                l1 = self.add_layer(self.tfs, self.L1Neurons, trainable,activation_function=tf.nn.relu, norm=True)
                 if self.L2Neurons != 0:
-                    l2 = self.add_layer(l1, self.L2Neurons, trainable,activation_function=tf.nn.leaky_relu, norm=True)
+                    l2 = self.add_layer(l1, self.L2Neurons, trainable,activation_function=tf.nn.relu, norm=True)
             with tf.variable_scope('Action_Expectation'):
                 # softmax may lead to NaN
                 if self.L2Neurons != 0:
                     expectation = \
-                            self.add_layer(l2, self.A_DIM, activation_function=tf.nn.leaky_relu, norm=True)
+                            self.add_layer(l2, self.A_DIM, activation_function=tf.nn.softmax, norm=True)
                 else:
                     expectation = \
-                            self.add_layer(l1, self.A_DIM, activation_function=tf.nn.leaky_relu, norm=True)
+                            self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=True)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
         return expectation, params
 
