@@ -126,6 +126,7 @@ class Worker(object):
                     Skip this iteration, if the speedup/slowdown is not obvious
                     '''
                     speedup = calc.calcOverallSpeedup(ResetInfo, info)
+                    """
                     if abs(speedup) < 0.0:
                         # This result in bad evaluation.
                         hp.ColorPrint(Fore.RED,
@@ -136,6 +137,7 @@ class Worker(object):
                         else:
                             states = nextStates
                             continue
+                    """
                     '''
                     Match the states and rewards
                     '''
