@@ -24,7 +24,7 @@ import io
 from time import gmtime, strftime
 import argparse
 import pytz
-import DPPO
+import PPPO
 import Helpers as hp
 from Helpers import EnvCalculator as calc
 
@@ -246,7 +246,7 @@ if __name__ == '__main__':
             SharedStorage['Counters']['ep'] = int(f.read())
             hp.ColorPrint(Fore.LIGHTCYAN_EX, "Restore Episode:{}".format(SharedStorage['Counters']['ep']))
 
-    GlobalPPO = DPPO.PPO(gym.make(Game).unwrapped,
+    GlobalPPO = PPPO.PPO(gym.make(Game).unwrapped,
             args['logdir'], 'model.ckpt',
             isTraining=args['training'],
             SharedStorage=SharedStorage,
