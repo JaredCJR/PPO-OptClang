@@ -14,7 +14,7 @@
   "WorkerParameters": {
               "EP_MAX"         :100000,
               "N_WORKER"       :10,
-              "MIN_BATCH_SIZE" :28,
+              "MIN_BATCH_SIZE" :20,
               "GAMMA"          :0.95
                       },
   "RL_Parameters":    {
@@ -24,7 +24,7 @@
               "LR_DECAY"       :0.7,
               "LR_DECAY_FREQ"  :1000,
               "UpdateDepth"    :5,
-              "L1Neurons"      :512,
-              "L2Neurons"      :128
+              "L1Neurons"      :768,
+              "L2Neurons"      :0
                       }
 }
