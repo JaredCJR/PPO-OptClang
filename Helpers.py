@@ -442,6 +442,8 @@ class EnvCalculator(object):
         Input: np.array * 3
         Return: np.array * 3 and [how many data do you removed]
         """
+        if AbandonRatio == 0:
+            return vstack_s, vstack_a, vstack_r, 0
         # goal: remove the reward data smaller than 20 percentile(abs)
         orig_s = vstack_s
         orig_a = vstack_a

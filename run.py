@@ -177,7 +177,7 @@ class Worker(object):
                     Remove data that are not important in the batch
                     '''
                     vstack_s, vstack_a, vstack_r, delCount = \
-                            calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r, AbandonRatio=20)
+                            calc.RemoveTrivialData(vstack_s, vstack_a, vstack_r, AbandonRatio=0)
                     hp.ColorPrint(Fore.GREEN, "Throw away {} data in this batch".format(delCount))
                     self.SharedStorage['Locks']['counter'].acquire()
                     self.SharedStorage['Counters']['update_counter'] = \
