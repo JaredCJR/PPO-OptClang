@@ -265,10 +265,10 @@ class PPO(object):
                 # softmax may lead to NaN
                 if self.L2Neurons != 0:
                     expectation = \
-                            self.add_layer(l2, self.A_DIM, activation_function=tf.nn.softmax, norm=True)
+                            self.add_layer(l2, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
                 else:
                     expectation = \
-                            self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=True)
+                            self.add_layer(l1, self.A_DIM, activation_function=tf.nn.softmax, norm=False)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
         return expectation, params
 
