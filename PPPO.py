@@ -96,7 +96,7 @@ class PPO(object):
             with tf.variable_scope('Fully_Connected'):
                 l1 = self.add_layer(self.tfs, self.L1Neurons, activation_function=tf.nn.leaky_relu, norm=True)
                 if self.L2Neurons != 0:
-                    l2 = self.add_layer(l1, self.L2Neurons, activation_function=tf.nn.leaky_relu, norm=True)
+                    l2 = self.add_layer(l1, self.L2Neurons, activation_function=tf.nn.leaky_relu, norm=False)
             with tf.variable_scope('Value'):
                 if self.L2Neurons != 0:
                     self.v = tf.layers.dense(l2, 1)
