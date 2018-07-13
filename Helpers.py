@@ -254,9 +254,9 @@ class EnvCalculator(object):
         SigmaRatio = abs_delta_total_cycles/(2*sigma_total_cycles)
         if SigmaRatio < 0.5:
             #SigmaRatio *= 0.25
-            SigmaRatio *= 0.3 # 68% data may be the error, are not that important.
+            SigmaRatio *= 0.1 # 68% data may be the error, are not that important.
         elif SigmaRatio < 1.0:
-            SigmaRatio *= 0.7 # 95%-68% data is not that convincing.
+            SigmaRatio *= 0.5 # 95%-68% data is not that convincing.
 
         UsageNumOverAll = 0
         for name, usage in newAllUsageDict.items():
@@ -268,20 +268,54 @@ class EnvCalculator(object):
             new_usage = newAllUsageDict[FunctionName]
             UseOverallPerf = False
             '''
-            The Alpha need to be tuned.
+            The Alpha and Beta need to be tuned.
             '''
-            Alpha = 30
+            Alpha = 20
+            Beta = 2
             isSpeedup = False
             isSlowDown = False
-            if old_usage is None or new_usage is None:
+            if old_usage is None and new_usage is None:
+                '''
+                This function does not matters
+                '''
                 UseOverallPerf = True
+            # treat the function that miss either old or new usage as the both not profiled function.
+            elif old_usage is None or new_usage is None:
+                UseOverallPerf = True
+                """
+            elif old_usage is None:
+                '''
+                may be slow down
+                '''
+                UseOverallPerf = True
+                Alpha *= Beta
+                isSlowDown = True
+            elif new_usage is None:
+                '''
+                may be speedup
+                '''
+                UseOverallPerf = True
+                Alpha *= Beta
+                isSpeedup = True
+                """
             else:
                 '''
                 This may be more accurate
                 How important: based on how many functions are profiled.
                 '''
                 UseOverallPerf = False
+                #Alpha = Alpha*(Beta*(1 / UsageProfiledRatio)) * 2 # more important
+                Alpha = Alpha*Beta*5 # more important
+                #print("UsageProfiledRatio={}".format(UsageProfiledRatio))
             if UseOverallPerf:
+                '''
+                if isSlowDown == True and delta_total_cycles > 0:
+                    Alpha /= Beta
+                    #delta_total_cycles *= -1
+                elif isSpeedup == True and delta_total_cycles < 0:
+                    Alpha /= Beta
+                    #delta_total_cycles *= -1
+                '''
                 reward = Alpha*SigmaRatio*(delta_total_cycles/old_total_cycles)
             else:
                 old_function_cycles = old_total_cycles * old_usage
@@ -408,8 +442,6 @@ class EnvCalculator(object):
         Input: np.array * 3
         Return: np.array * 3 and [how many data do you removed]
         """
-        if AbandonRatio == 0:
-            return vstack_s, vstack_a, vstack_r, 0
         # goal: remove the reward data smaller than 20 percentile(abs)
         orig_s = vstack_s
         orig_a = vstack_a
