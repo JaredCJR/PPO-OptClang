@@ -298,7 +298,8 @@ class PPO(object):
             idx += 1
         # some probs may be the same.
         # Try to avoid that every time choose the same action
-        shuffle(probList)
+        if self.isTraining == True:
+            shuffle(probList)
         # sort with probs in descending order
         probList.sort(key=itemgetter(1), reverse=True)
         # find the one that is not applied yet
